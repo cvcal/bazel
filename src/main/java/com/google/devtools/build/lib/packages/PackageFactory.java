@@ -38,7 +38,6 @@ import com.google.devtools.build.lib.skylarkinterface.Param;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkSignature;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkValue;
 import com.google.devtools.build.lib.syntax.BaseFunction;
-import com.google.devtools.build.lib.syntax.BazelLibrary;
 import com.google.devtools.build.lib.syntax.BuildFileAST;
 import com.google.devtools.build.lib.syntax.BuiltinFunction;
 import com.google.devtools.build.lib.syntax.ClassObject;
@@ -49,7 +48,6 @@ import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.EvalUtils;
 import com.google.devtools.build.lib.syntax.FuncallExpression;
 import com.google.devtools.build.lib.syntax.FunctionSignature;
-import com.google.devtools.build.lib.syntax.GlobList;
 import com.google.devtools.build.lib.syntax.Mutability;
 import com.google.devtools.build.lib.syntax.ParserInputSource;
 import com.google.devtools.build.lib.syntax.Runtime;
@@ -62,7 +60,6 @@ import com.google.devtools.build.lib.syntax.SkylarkUtils;
 import com.google.devtools.build.lib.syntax.Statement;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.syntax.Type.ConversionException;
-import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.UnixGlob;
@@ -72,7 +69,6 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.Future;
@@ -362,7 +358,7 @@ public final class PackageFactory {
       return this;
     }
 
-    public abstract PackageFactory build(RuleClassProvider ruleClassProvider, FileSystem fs);
+    public abstract PackageFactory build(RuleClassProvider ruleClassProvider);
   }
 
   @VisibleForTesting
@@ -581,13 +577,7 @@ public final class PackageFactory {
       throw new EvalException(ast.getLocation(), e.getMessage());
     }
 
-    GlobList<String> globList = GlobList.captureResults(includes, excludes, matches);
-    if (env.getSemantics().incompatibleDisableGlobTracking()) {
-      // Converting to ImmutableList will remove glob information from the list.
-      return MutableList.copyOf(env, ImmutableList.copyOf(globList));
-    } else {
-      return MutableList.copyOf(env, globList);
-    }
+    return MutableList.copyOf(env, matches);
   }
 
   /**
@@ -631,6 +621,10 @@ public final class PackageFactory {
               List<Label> defaults = BuildType.LABEL_LIST.convert(defaultsList,
                   "'environment_group argument'", context.pkgBuilder.getBuildFileLabel());
 
+              if (environments.isEmpty()) {
+                throw new EvalException(location,
+                    "environment group " + name + " must contain at least one environment");
+              }
               try {
                 context.pkgBuilder.addEnvironmentGroup(
                     name, environments, defaults, context.eventHandler, loc);
@@ -1331,7 +1325,13 @@ public final class PackageFactory {
       throws NoSuchPackageException, InterruptedException {
     Package externalPkg = newExternalPackageBuilder(
         buildFile.getRelative(Label.WORKSPACE_FILE_NAME), "TESTING").build();
-    return createPackageForTesting(packageId, externalPkg, buildFile, locator, eventHandler);
+    return createPackageForTesting(
+        packageId,
+        externalPkg,
+        buildFile,
+        locator,
+        eventHandler,
+        SkylarkSemantics.DEFAULT_SEMANTICS);
   }
 
   /**
@@ -1344,7 +1344,8 @@ public final class PackageFactory {
       Package externalPkg,
       Path buildFile,
       CachingPackageLocator locator,
-      ExtendedEventHandler eventHandler)
+      ExtendedEventHandler eventHandler,
+      SkylarkSemantics semantics)
       throws NoSuchPackageException, InterruptedException {
     String error =
         LabelValidator.validatePackageName(packageId.getPackageFragment().getPathString());
@@ -1354,7 +1355,7 @@ public final class PackageFactory {
     }
     byte[] buildFileBytes = maybeGetBuildFileBytes(buildFile, eventHandler);
     if (buildFileBytes == null) {
-      throw new BuildFileContainsErrorsException(packageId, "IOException occured");
+      throw new BuildFileContainsErrorsException(packageId, "IOException occurred");
     }
 
     Globber globber = createLegacyGlobber(buildFile.getParentDirectory(), packageId, locator);
@@ -1372,7 +1373,7 @@ public final class PackageFactory {
                 /*imports=*/ ImmutableMap.<String, Extension>of(),
                 /*skylarkFileDependencies=*/ ImmutableList.<Label>of(),
                 /*defaultVisibility=*/ ConstantRuleVisibility.PUBLIC,
-                SkylarkSemantics.DEFAULT_SEMANTICS,
+                semantics,
                 globber)
             .build();
     for (Postable post : result.getPosts()) {
@@ -1501,9 +1502,10 @@ public final class PackageFactory {
    */
   private ClassObject newNativeModule() {
     ImmutableMap.Builder<String, Object> builder = new ImmutableMap.Builder<>();
-    Runtime.BuiltinRegistry builtins = Runtime.getBuiltinRegistry();
-    for (String nativeFunction : builtins.getFunctionNames(SkylarkNativeModule.class)) {
-      builder.put(nativeFunction, builtins.getFunction(SkylarkNativeModule.class, nativeFunction));
+    SkylarkNativeModule nativeModuleInstance = new SkylarkNativeModule();
+    for (String nativeFunction : FuncallExpression.getMethodNames(SkylarkNativeModule.class)) {
+      builder.put(nativeFunction,
+          FuncallExpression.getBuiltinCallable(nativeModuleInstance, nativeFunction));
     }
     builder.putAll(ruleFunctions);
     builder.put("package", newPackageFunction(packageArguments));
@@ -1523,6 +1525,17 @@ public final class PackageFactory {
     // or if not possible, at least make them straight copies from the native module variant.
     // or better, use a common Environment.Frame for these common bindings
     // (that shares a backing ImmutableMap for the bindings?)
+    Object packageNameFunction;
+    Object repositoryNameFunction;
+    try {
+      packageNameFunction = nativeModule.getValue("package_name");
+      repositoryNameFunction = nativeModule.getValue("repository_name");
+    } catch (EvalException exception) {
+      // This should not occur, as nativeModule.getValue should never throw an exception.
+      throw new IllegalStateException(
+          "error getting package_name or repository_name functions from the native module",
+          exception);
+    }
     pkgEnv
         .setup("native", nativeModule)
         .setup("distribs", newDistribsFunction.apply(context))
@@ -1531,11 +1544,11 @@ public final class PackageFactory {
         .setup("exports_files", newExportsFilesFunction.apply())
         .setup("package_group", newPackageGroupFunction.apply())
         .setup("package", newPackageFunction(packageArguments))
-        .setup("package_name", SkylarkNativeModule.packageName)
-        .setup("repository_name", SkylarkNativeModule.repositoryName)
+        .setup("package_name", packageNameFunction)
+        .setup("repository_name", repositoryNameFunction)
         .setup("environment_group", newEnvironmentGroupFunction.apply(context));
 
-    for (Entry<String, BuiltinRuleFunction> entry : ruleFunctions.entrySet()) {
+    for (Map.Entry<String, BuiltinRuleFunction> entry : ruleFunctions.entrySet()) {
       pkgEnv.setup(entry.getKey(), entry.getValue());
     }
 
@@ -1544,8 +1557,10 @@ public final class PackageFactory {
     }
 
     pkgEnv.setupDynamic(PKG_CONTEXT, context);
-    pkgEnv.setupDynamic(Runtime.PKG_NAME, packageId.getPackageFragment().getPathString());
-    pkgEnv.setupDynamic(Runtime.REPOSITORY_NAME, packageId.getRepository().toString());
+    if (!pkgEnv.getSemantics().incompatiblePackageNameIsAFunction()) {
+      pkgEnv.setupDynamic(Runtime.PKG_NAME, packageId.getPackageFragment().getPathString());
+      pkgEnv.setupDynamic(Runtime.REPOSITORY_NAME, packageId.getRepository().toString());
+    }
   }
 
   /**

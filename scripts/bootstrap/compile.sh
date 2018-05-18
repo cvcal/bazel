@@ -228,7 +228,7 @@ local_repository(name = 'bazel_tools', path = '${BAZEL_TOOLS_REPO}')
 bind(name = "cc_toolchain", actual = "@bazel_tools//tools/cpp:default-toolchain")
 EOF
 
-  create_deploy_jar "libblaze" "com.google.devtools.build.lib.bazel.BazelMain" \
+  create_deploy_jar "libblaze" "com.google.devtools.build.lib.bazel.Bazel" \
       ${OUTPUT_DIR}
 fi
 
@@ -349,6 +349,7 @@ function run_bazel_jar() {
       --output_base=${OUTPUT_DIR}/out \
       --output_user_root=${OUTPUT_DIR}/user_root \
       --install_md5= \
+      --default_system_javabase="${JAVA_HOME}" \
       --workspace_directory="$(get_cwd)" \
       --nofatal_event_bus_exceptions \
       ${BAZEL_DIR_STARTUP_OPTIONS} \

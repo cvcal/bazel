@@ -20,6 +20,8 @@ import com.google.devtools.build.lib.skylarkinterface.ParamType;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.syntax.Environment;
 import com.google.devtools.build.lib.syntax.FuncallExpression;
+import com.google.devtools.build.lib.syntax.SkylarkDict;
+import com.google.devtools.build.lib.syntax.SkylarkList;
 import com.google.devtools.build.lib.syntax.SkylarkSemantics;
 
 /**
@@ -29,7 +31,7 @@ public class GoldenCase {
 
   @SkylarkCallable(
     name = "struct_field_method",
-    doc = "",
+    documented = false,
     structField = true)
   public String structFieldMethod() {
     return "foo";
@@ -37,7 +39,7 @@ public class GoldenCase {
 
   @SkylarkCallable(
     name = "struct_field_method_with_info",
-    doc = "",
+    documented = false,
     structField = true,
     useSkylarkSemantics = true
   )
@@ -47,19 +49,20 @@ public class GoldenCase {
 
   @SkylarkCallable(
     name = "zero_arg_method",
-    doc = "")
+    documented = false)
   public Integer zeroArgMethod() {
     return 0;
   }
 
-  @SkylarkCallable(name = "zero_arg_method_with_environment", doc = "", useEnvironment = true)
+  @SkylarkCallable(name = "zero_arg_method_with_environment", documented = false,
+      useEnvironment = true)
   public Integer zeroArgMethod(Environment environment) {
     return 0;
   }
 
   @SkylarkCallable(
     name = "zero_arg_method_with_skylark_info",
-    doc = "",
+    documented = false,
     useAst = true,
     useLocation = true,
     useEnvironment = true,
@@ -75,19 +78,19 @@ public class GoldenCase {
 
   @SkylarkCallable(
     name = "three_arg_method",
-    doc = "")
+    documented = false)
   public String threeArgMethod(String one, Integer two, String three) {
     return "bar";
   }
 
-  @SkylarkCallable(name = "three_arg_method_with_ast", doc = "", useAst = true)
+  @SkylarkCallable(name = "three_arg_method_with_ast", documented = false, useAst = true)
   public String threeArgMethod(String one, Integer two, String three, FuncallExpression ast) {
     return "bar";
   }
 
   @SkylarkCallable(
     name = "three_arg_method_with_params",
-    doc = "",
+    documented = false,
     parameters = {
       @Param(name = "one", type = String.class, named = true),
       @Param(name = "two", type = Integer.class, named = true),
@@ -104,7 +107,7 @@ public class GoldenCase {
 
   @SkylarkCallable(
     name = "three_arg_method_with_params_and_info",
-    doc = "",
+    documented = false,
     parameters = {
       @Param(name = "one", type = String.class, named = true),
       @Param(name = "two", type = Integer.class, named = true),
@@ -124,5 +127,88 @@ public class GoldenCase {
       Environment environment,
       SkylarkSemantics skylarkSemantics) {
     return "baz";
+  }
+
+  @SkylarkCallable(
+      name = "many_arg_method_mixing_positional_and_named",
+      documented = false,
+      parameters = {
+          @Param(name = "one", type = String.class, positional = true, named = false),
+          @Param(name = "two", type = String.class, positional = true, named = true),
+          @Param(name = "three", type = String.class, positional = true, named = true,
+              defaultValue = "three"),
+          @Param(name = "four", type = String.class, positional = false, named = true),
+          @Param(name = "five", type = String.class, positional = false, named = true,
+              defaultValue = "five"),
+          @Param(name = "six", type = String.class, positional = false, named = true),
+      },
+      useLocation = true
+  )
+  public String manyArgMethodMixingPositoinalAndNamed(
+      String one,
+      String two,
+      String three,
+      String four,
+      String five,
+      String six,
+      Location location) {
+    return "baz";
+  }
+
+  @SkylarkCallable(
+    name = "two_arg_method_with_params_and_info_and_kwargs",
+    documented = false,
+    parameters = {
+      @Param(name = "one", type = String.class, named = true),
+      @Param(name = "two", type = Integer.class, named = true),
+    },
+    extraKeywords = @Param(name = "kwargs"),
+    useAst = true,
+    useLocation = true,
+    useEnvironment = true,
+    useSkylarkSemantics = true
+  )
+  public String twoArgMethodWithParamsAndInfoAndKwargs(
+      String one,
+      Integer two,
+      SkylarkDict<?, ?> kwargs,
+      Location location,
+      FuncallExpression ast,
+      Environment environment,
+      SkylarkSemantics skylarkSemantics) {
+    return "blep";
+  }
+
+  @SkylarkCallable(
+    name = "two_arg_method_with_env_and_args_and_kwargs",
+    documented = false,
+    parameters = {
+      @Param(name = "one", type = String.class, named = true),
+      @Param(name = "two", type = Integer.class, named = true),
+    },
+    extraPositionals = @Param(name = "args"),
+    extraKeywords = @Param(name = "kwargs"),
+    useEnvironment = true
+  )
+  public String twoArgMethodWithParamsAndInfoAndKwargs(
+      String one,
+      Integer two,
+      SkylarkList<?> args,
+      SkylarkDict<?, ?> kwargs,
+      Environment environment) {
+    return "yar";
+  }
+
+  @SkylarkCallable(
+    name = "selfCallMethod",
+    selfCall = true,
+    parameters = {
+        @Param(name = "one", type = String.class, named = true),
+        @Param(name = "two", type = Integer.class, named = true),
+    },
+    documented = false
+  )
+  public Integer selfCallMethod(String one, Integer two) {
+    return 0;
   }
 }

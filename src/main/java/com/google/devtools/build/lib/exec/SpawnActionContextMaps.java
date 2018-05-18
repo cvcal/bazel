@@ -16,6 +16,7 @@ package com.google.devtools.build.lib.exec;
 import com.google.auto.value.AutoValue;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Joiner;
+import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.google.common.collect.HashBasedTable;
 import com.google.common.collect.ImmutableList;
@@ -43,7 +44,6 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Set;
 import java.util.TreeMap;
 
@@ -81,14 +81,14 @@ public final class SpawnActionContextMaps {
   }
 
   /**
-   * Returns the appropriate {@link ActionContext} to execute an action with the given {@code
-   * mnemonic} and {@link Spawn}.
+   * Returns the appropriate {@link ActionContext} to execute the given {@link Spawn} with.
    *
    * <p>If the reason for selecting the context is worth mentioning to the user, logs a message
    * using the given {@link Reporter}.
    */
-  public SpawnActionContext getSpawnActionContext(String mnemonic, Spawn spawn, Reporter reporter) {
-    if (!spawnStrategyRegexList.isEmpty() && spawn != null && spawn.getResourceOwner() != null) {
+  public SpawnActionContext getSpawnActionContext(Spawn spawn, Reporter reporter) {
+    Preconditions.checkNotNull(spawn);
+    if (!spawnStrategyRegexList.isEmpty() && spawn.getResourceOwner() != null) {
       String description = spawn.getResourceOwner().getProgressMessage();
       if (description != null) {
         for (RegexFilterSpawnActionContext entry : spawnStrategyRegexList) {
@@ -100,7 +100,7 @@ public final class SpawnActionContextMaps {
         }
       }
     }
-    SpawnActionContext context = spawnStrategyMnemonicMap.get(mnemonic);
+    SpawnActionContext context = spawnStrategyMnemonicMap.get(spawn.getMnemonic());
     if (context != null) {
       return context;
     }
@@ -137,7 +137,7 @@ public final class SpawnActionContextMaps {
    * <p>Prints out debug information about the mappings.
    */
   public void debugPrintSpawnActionContextMaps(Reporter reporter) {
-    for (Entry<String, SpawnActionContext> entry : spawnStrategyMnemonicMap.entrySet()) {
+    for (Map.Entry<String, SpawnActionContext> entry : spawnStrategyMnemonicMap.entrySet()) {
       reporter.handle(
           Event.info(
               String.format(
@@ -147,11 +147,11 @@ public final class SpawnActionContextMaps {
 
     ImmutableMap<Class<? extends ActionContext>, ActionContext> contextMap = contextMap();
     TreeMap<String, String> sortedContextMapWithSimpleNames = new TreeMap<>();
-    for (Entry<Class<? extends ActionContext>, ActionContext> entry : contextMap.entrySet()) {
+    for (Map.Entry<Class<? extends ActionContext>, ActionContext> entry : contextMap.entrySet()) {
       sortedContextMapWithSimpleNames.put(
           entry.getKey().getSimpleName(), entry.getValue().getClass().getSimpleName());
     }
-    for (Entry<String, String> entry : sortedContextMapWithSimpleNames.entrySet()) {
+    for (Map.Entry<String, String> entry : sortedContextMapWithSimpleNames.entrySet()) {
       // Skip uninteresting identity mappings of contexts.
       if (!entry.getKey().equals(entry.getValue())) {
         reporter.handle(

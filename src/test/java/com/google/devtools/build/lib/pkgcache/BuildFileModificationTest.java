@@ -78,16 +78,15 @@ public class BuildFileModificationTest extends FoundationTestCase {
         new BlazeDirectories(
             new ServerDirectories(outputBase, outputBase, outputBase),
             rootDirectory,
+            /* defaultSystemJavabase= */ null,
             analysisMock.getProductName());
     skyframeExecutor =
         SequencedSkyframeExecutor.create(
-            analysisMock
-                .getPackageFactoryBuilderForTesting(directories)
-                .build(ruleClassProvider, scratch.getFileSystem()),
+            analysisMock.getPackageFactoryBuilderForTesting(directories).build(ruleClassProvider),
             fileSystem,
             directories,
             actionKeyContext,
-            null, /* workspaceStatusActionFactory */
+            /* workspaceStatusActionFactory= */ null,
             ruleClassProvider.getBuildInfoFactories(),
             ImmutableList.<DiffAwareness.Factory>of(),
             analysisMock.getSkyFunctions(directories),

@@ -471,17 +471,16 @@ public class IncrementalLoadingTest {
               new ServerDirectories(
                   fs.getPath("/install"), fs.getPath("/output"), fs.getPath("/userRoot")),
               workspace,
+              /* defaultSystemJavabase= */ null,
               loadingMock.getProductName());
       ConfiguredRuleClassProvider ruleClassProvider = loadingMock.createRuleClassProvider();
       skyframeExecutor =
           SequencedSkyframeExecutor.create(
-              loadingMock
-                  .getPackageFactoryBuilderForTesting(directories)
-                  .build(ruleClassProvider, fs),
+              loadingMock.getPackageFactoryBuilderForTesting(directories).build(ruleClassProvider),
               fs,
               directories,
               actionKeyContext,
-              null, /* workspaceStatusActionFactory */
+              /* workspaceStatusActionFactory= */ null,
               loadingMock.createRuleClassProvider().getBuildInfoFactories(),
               ImmutableList.of(new ManualDiffAwarenessFactory()),
               ImmutableMap.<SkyFunctionName, SkyFunction>of(),

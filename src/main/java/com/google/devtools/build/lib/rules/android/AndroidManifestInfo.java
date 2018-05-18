@@ -21,15 +21,18 @@ import com.google.devtools.build.lib.packages.NativeProvider;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
+import com.google.devtools.build.lib.syntax.Environment;
 import com.google.devtools.build.lib.syntax.FunctionSignature;
 import com.google.devtools.build.lib.syntax.SkylarkType;
 
 /** A provider of information about this target's manifest. */
 @SkylarkModule(
-  name = "AndroidManifestInfo",
-  doc = "Information about the Android manifest provided by a rule",
-  category = SkylarkModuleCategory.PROVIDER
-)
+    name = "AndroidManifestInfo",
+    doc =
+        "Information about the Android manifest provided by a rule. Note that, as of now, the"
+            + " information exposed in this object is not directly consumed by Android rules -"
+            + " instead, use an AndroidResourcesInfo.",
+    category = SkylarkModuleCategory.PROVIDER)
 public class AndroidManifestInfo extends NativeInfo {
   private static final String SKYLARK_NAME = "AndroidManifestInfo";
 
@@ -37,23 +40,24 @@ public class AndroidManifestInfo extends NativeInfo {
       FunctionSignature.WithValues.create(
           FunctionSignature.of(
               /* numMandatoryPositionals = */ 2, // Manifest file and package
-              /* numOptionalPositionals = */ 1, // is_dummy defaults to False
+              /* numOptionalPositionals = */ 1, // exports_manifest
               /* numMandatoryNamedOnly = */ 0,
               /* starArg = */ false,
               /* kwArg = */ false,
               /* names = */ "manifest",
               "package",
-              "is_dummy"),
+              "exports_manifest"),
           /* defaultValues = */ ImmutableList.of(false), // is_dummy
           /* types = */ ImmutableList.of(
               SkylarkType.of(Artifact.class), // manifest
               SkylarkType.STRING, // package
-              SkylarkType.BOOL)); // is_dummy
+              SkylarkType.BOOL)); // exports_manifest
 
   public static final NativeProvider<AndroidManifestInfo> PROVIDER =
       new NativeProvider<AndroidManifestInfo>(AndroidManifestInfo.class, SKYLARK_NAME, SIGNATURE) {
         @Override
-        public AndroidManifestInfo createInstanceFromSkylark(Object[] args, Location loc) {
+        public AndroidManifestInfo createInstanceFromSkylark(
+            Object[] args, Environment env, Location loc) {
           // Skylark support code puts positional inputs in the correct order and validates types.
           return of((Artifact) args[0], (String) args[1], (boolean) args[2]);
         }
@@ -61,24 +65,23 @@ public class AndroidManifestInfo extends NativeInfo {
 
   private final Artifact manifest;
   private final String pkg;
-  private final boolean isDummy;
+  private final boolean exportsManifest;
 
-  static AndroidManifestInfo of(Artifact manifest, String pkg, boolean isDummy) {
-    return new AndroidManifestInfo(manifest, pkg, isDummy);
+  static AndroidManifestInfo of(Artifact manifest, String pkg, boolean exportsManifest) {
+    return new AndroidManifestInfo(manifest, pkg, exportsManifest);
   }
 
-  private AndroidManifestInfo(Artifact manifest, String pkg, boolean isDummy) {
+  private AndroidManifestInfo(Artifact manifest, String pkg, boolean exportsManifest) {
     super(PROVIDER);
     this.manifest = manifest;
     this.pkg = pkg;
-    this.isDummy = isDummy;
+    this.exportsManifest = exportsManifest;
   }
 
   @SkylarkCallable(
-    name = "manifest",
-    doc = "This target's manifest, merged with manifests from dependencies",
-    structField = true
-  )
+      name = "manifest",
+      doc = "This target's manifest, merged with manifests from dependencies",
+      structField = true)
   public Artifact getManifest() {
     return manifest;
   }
@@ -89,13 +92,14 @@ public class AndroidManifestInfo extends NativeInfo {
   }
 
   @SkylarkCallable(
-    name = "is_dummy",
-    doc =
-        "If true, this manifest is a Bazel-generated file used to provide package information to"
-            + " tools. If false, this manifest is based on one or more user-supplied manifests.",
-    structField = true
-  )
-  public boolean isDummy() {
-    return isDummy;
+      name = "exports_manifest",
+      doc = "If this manifest should be exported to targets that depend on it",
+      structField = true)
+  public boolean exportsManifest() {
+    return exportsManifest;
+  }
+
+  public StampedAndroidManifest asStampedManifest() {
+    return new StampedAndroidManifest(manifest, pkg, exportsManifest);
   }
 }

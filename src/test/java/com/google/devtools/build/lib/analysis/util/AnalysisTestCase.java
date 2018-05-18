@@ -31,6 +31,7 @@ import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.ServerDirectories;
+import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.buildinfo.BuildInfoFactory;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationCollection;
@@ -156,6 +157,7 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
         new BlazeDirectories(
             new ServerDirectories(outputBase, outputBase, outputBase),
             rootDirectory,
+            /* defaultSystemJavabase= */ null,
             analysisMock.getProductName());
     workspaceStatusActionFactory =
         new AnalysisTestUtil.DummyWorkspaceStatusActionFactory(directories);
@@ -196,7 +198,7 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
     PackageFactory pkgFactory =
         analysisMock
             .getPackageFactoryBuilderForTesting(directories)
-            .build(ruleClassProvider, scratch.getFileSystem());
+            .build(ruleClassProvider);
     useConfiguration();
     skyframeExecutor =
         createSkyframeExecutor(pkgFactory, ruleClassProvider.getBuildInfoFactories());
@@ -237,7 +239,7 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
    * Sets host and target configuration using the specified options, falling back to the default
    * options for unspecified ones, and recreates the build view.
    */
-  protected final void useConfiguration(String... args) throws Exception {
+  public final void useConfiguration(String... args) throws Exception {
     optionsParser =
         OptionsParser.newOptionsParser(
             Iterables.concat(
@@ -455,6 +457,10 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
         reporter, parsedLabel, configuration);
   }
 
+  protected final BuildConfiguration getConfiguration(TransitiveInfoCollection ct) {
+    return skyframeExecutor.getConfiguration(reporter, ct.getConfigurationKey());
+  }
+
   /**
    * Returns the corresponding configured target, if it exists. Note that this will only return
    * anything useful after a call to update() with the same label. The label passed in must
@@ -476,7 +482,8 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
         .getDerivedArtifact(
             label.getPackageFragment().getRelative(packageRelativePath),
             getTargetConfiguration().getBinDirectory(label.getPackageIdentifier().getRepository()),
-            ConfiguredTargetKey.of(owner));
+            ConfiguredTargetKey.of(
+                owner, skyframeExecutor.getConfiguration(reporter, owner.getConfigurationKey())));
   }
 
   protected Set<SkyKey> getSkyframeEvaluatedTargetKeys() {

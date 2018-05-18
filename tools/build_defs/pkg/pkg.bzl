@@ -47,6 +47,10 @@ def _pkg_tar_impl(ctx):
   if ctx.attr.ownernames:
     args += ["--owner_names=%s=%s" % (key, ctx.attr.ownernames[key])
              for key in ctx.attr.ownernames]
+  if ctx.attr.empty_files:
+    args += ["--empty_file=%s" % empty_file for empty_file in ctx.attr.empty_files]
+  if ctx.attr.empty_dirs:
+    args += ["--empty_dir=%s" % empty_dir for empty_dir in ctx.attr.empty_dirs]
   if ctx.attr.extension:
     dotPos = ctx.attr.extension.find('.')
     if dotPos > 0:
@@ -175,6 +179,8 @@ _real_pkg_tar = rule(
         "ownernames": attr.string_dict(),
         "extension": attr.string(default="tar"),
         "symlinks": attr.string_dict(),
+        "empty_files": attr.string_list(),
+        "empty_dirs": attr.string_list(),
         # Implicit dependencies.
         "build_tar": attr.label(
             default=Label("//tools/build_defs/pkg:build_tar"),
@@ -193,7 +199,7 @@ def pkg_tar(**kwargs):
   if "srcs" not in kwargs:
     if "files" in kwargs:
       if not hasattr(kwargs["files"], "items"):
-        label = "%s//%s:%s" % (REPOSITORY_NAME, native.package_name(), kwargs["name"])
+        label = "%s//%s:%s" % (native.repository_name(), native.package_name(), kwargs["name"])
         print("%s: you provided a non dictionary to the pkg_tar `files` attribute. " % (label,) +
               "This attribute was renamed to `srcs`. " +
               "Consider renaming it in your BUILD file.")

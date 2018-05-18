@@ -128,8 +128,7 @@ final class DarwinSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
     this.allowNetwork = SandboxHelpers.shouldAllowNetwork(cmdEnv.getOptions());
     this.alwaysWritableDirs = getAlwaysWritableDirs(cmdEnv.getRuntime().getFileSystem());
     this.processWrapper = ProcessWrapperUtil.getProcessWrapper(cmdEnv);
-    this.localEnvProvider =
-        new XcodeLocalEnvProvider(cmdEnv.getRuntime().getProductName(), cmdEnv.getClientEnv());
+    this.localEnvProvider = new XcodeLocalEnvProvider(cmdEnv.getClientEnv());
     this.sandboxBase = sandboxBase;
     this.timeoutKillDelay = timeoutKillDelay;
     this.sandboxfsProcess = sandboxfsProcess;
@@ -193,10 +192,14 @@ final class DarwinSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
   }
 
   @Override
-  protected SpawnResult actuallyExec(Spawn spawn, SpawnExecutionPolicy policy)
+  protected SpawnResult actuallyExec(Spawn spawn, SpawnExecutionContext context)
       throws IOException, InterruptedException {
-    // Each invocation of "exec" gets its own sandbox.
-    Path sandboxPath = sandboxBase.getRelative(Integer.toString(policy.getId()));
+    // Each invocation of "exec" gets its own sandbox base.
+    // Note that the value returned by context.getId() is only unique inside one given SpawnRunner,
+    // so we have to prefix our name to turn it into a globally unique value.
+    Path sandboxPath =
+        sandboxBase.getRelative(getName()).getRelative(Integer.toString(context.getId()));
+    sandboxPath.getParentDirectory().createDirectory();
     sandboxPath.createDirectory();
 
     // b/64689608: The execroot of the sandboxed process must end with the workspace name, just like
@@ -215,7 +218,7 @@ final class DarwinSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
     ImmutableSet<PathFragment> outputs = SandboxHelpers.getOutputFiles(spawn);
 
     final Path sandboxConfigPath = sandboxPath.getRelative("sandbox.sb");
-    Duration timeout = policy.getTimeout();
+    Duration timeout = context.getTimeout();
 
     ProcessWrapperUtil.CommandLineBuilder processWrapperCommandLineBuilder =
         ProcessWrapperUtil.commandLineBuilder(processWrapper.getPathString(), spawn.getArguments())
@@ -241,7 +244,7 @@ final class DarwinSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
 
     boolean allowNetworkForThisSpawn = allowNetwork || Spawns.requiresNetwork(spawn);
 
-    Map<PathFragment, Path> inputs = SandboxHelpers.getInputFiles(spawn, policy, execRoot);
+    Map<PathFragment, Path> inputs = SandboxHelpers.processInputFiles(spawn, context, execRoot);
 
     SandboxedSpawn sandbox;
     if (sandboxfsProcess != null) {
@@ -287,7 +290,7 @@ final class DarwinSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
             }
           };
     }
-    return runSpawn(spawn, sandbox, policy, execRoot, timeout, statisticsPath);
+    return runSpawn(spawn, sandbox, context, execRoot, timeout, statisticsPath);
   }
 
   private void writeConfig(

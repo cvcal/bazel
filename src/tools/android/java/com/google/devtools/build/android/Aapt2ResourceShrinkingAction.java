@@ -63,8 +63,6 @@ public class Aapt2ResourceShrinkingAction {
     optionsParser.parseAndExitUponError(args);
     Aapt2ConfigOptions aapt2ConfigOptions = optionsParser.getOptions(Aapt2ConfigOptions.class);
     Options options = optionsParser.getOptions(Options.class);
-    options.dependencyManifests =
-        Converters.concatLists(options.dependencyManifests, options.deprecatedDependencyManifests);
     profiler.recordEndOf("flags").startTask("setup");
 
     final ListeningExecutorService executorService = ExecutorServiceCloser.createDefaultService();
@@ -78,7 +76,8 @@ public class Aapt2ResourceShrinkingAction {
               executorService,
               workingResourcesDirectory,
               aapt2ConfigOptions.aapt2,
-              aapt2ConfigOptions.buildToolsVersion);
+              aapt2ConfigOptions.buildToolsVersion,
+              aapt2ConfigOptions.generatePseudoLocale);
       profiler.recordEndOf("setup").startTask("compile");
 
       final ResourcesZip resourcesZip =
@@ -112,6 +111,7 @@ public class Aapt2ResourceShrinkingAction {
           .outputAsProto(aapt2ConfigOptions.resourceTableAsProto)
           .buildVersion(aapt2ConfigOptions.buildToolsVersion)
           .includeOnlyConfigs(aapt2ConfigOptions.resourceConfigs)
+          .debug(aapt2ConfigOptions.debug)
           .link(compiled)
           .copyPackageTo(options.shrunkApk)
           .copyRTxtTo(options.rTxtOutput);

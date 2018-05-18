@@ -79,7 +79,6 @@ public abstract class ConfigurationTestCase extends FoundationTestCase {
       documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
       effectTags = {OptionEffectTag.NO_OP},
       defaultValue = "",
-      category = "semantics",
       help = "Additional target CPUs."
     )
     public List<String> multiCpus;
@@ -108,11 +107,12 @@ public abstract class ConfigurationTestCase extends FoundationTestCase {
         new BlazeDirectories(
             new ServerDirectories(outputBase, outputBase, outputBase),
             rootDirectory,
+            /* defaultSystemJavabase= */ null,
             analysisMock.getProductName());
     pkgFactory =
         analysisMock
             .getPackageFactoryBuilderForTesting(directories)
-            .build(ruleClassProvider, scratch.getFileSystem());
+            .build(ruleClassProvider);
     AnalysisTestUtil.DummyWorkspaceStatusActionFactory workspaceStatusActionFactory =
         new AnalysisTestUtil.DummyWorkspaceStatusActionFactory(directories);
     skyframeExecutor =

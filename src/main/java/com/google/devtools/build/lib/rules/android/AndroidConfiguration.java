@@ -24,7 +24,6 @@ import com.google.devtools.build.lib.analysis.config.BuildConfiguration.EmptyToN
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.Fragment;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.LabelConverter;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
-import com.google.devtools.build.lib.analysis.config.ConfigurationEnvironment;
 import com.google.devtools.build.lib.analysis.config.ConfigurationFragmentFactory;
 import com.google.devtools.build.lib.analysis.config.FragmentOptions;
 import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
@@ -147,7 +146,7 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
       return signV1;
     }
 
-    /** Wheter to sign the APK with the apksigner tool with APK Signature Schema V2. */
+    /** Whether to sign the APK with the apksigner tool with APK Signature Schema V2. */
     public boolean signV2() {
       return signV2;
     }
@@ -231,23 +230,14 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
         throws RuleErrorException {
       if (ruleContext.isLegalFragment(AndroidConfiguration.class)) {
         boolean hasAapt2 = AndroidSdkProvider.fromRuleContext(ruleContext).getAapt2() != null;
-        AndroidAaptVersion flag =
-            ruleContext.getFragment(AndroidConfiguration.class).getAndroidAaptVersion();
 
         if (ruleContext.getRule().isAttrDefined("aapt_version", STRING)) {
           // On rules that can choose a version, test attribute then flag choose the aapt version
           // target.
-          AndroidAaptVersion version =
-              fromString(ruleContext.attributes().get("aapt_version", STRING));
-          // version is null if the value is "auto"
-          version = version == AndroidAaptVersion.AUTO ? flag : version;
-
-          if (version == AAPT2 && !hasAapt2) {
-            ruleContext.throwWithRuleError(
-                "aapt2 processing requested but not available on the android_sdk");
-            return null;
-          }
-          return version == AndroidAaptVersion.AUTO ? AAPT : version;
+          return chooseTargetAaptVersion(
+              ruleContext,
+              ruleContext.getFragment(AndroidConfiguration.class),
+              ruleContext.attributes().get("aapt_version", STRING));
         } else {
           // On rules can't choose, assume aapt2 if aapt2 is present in the sdk.
           return hasAapt2 ? AAPT2 : AAPT;
@@ -255,11 +245,40 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
       }
       return null;
     }
+
+    @Nullable
+    public static AndroidAaptVersion chooseTargetAaptVersion(
+        RuleContext ruleContext, AndroidConfiguration androidConfig, @Nullable String versionString)
+        throws RuleErrorException {
+
+      boolean hasAapt2 = AndroidSdkProvider.fromRuleContext(ruleContext).getAapt2() != null;
+      AndroidAaptVersion flag = androidConfig.getAndroidAaptVersion();
+
+      AndroidAaptVersion version = fromString(versionString);
+      // version is null if the value is "auto"
+      version = version == AndroidAaptVersion.AUTO ? flag : version;
+
+      if (version == AAPT2 && !hasAapt2) {
+        ruleContext.throwWithRuleError(
+            "aapt2 processing requested but not available on the android_sdk");
+        return null;
+      }
+      return version == AndroidAaptVersion.AUTO ? AAPT : version;
+    }
   }
 
   /** Android configuration options. */
   @AutoCodec(strategy = AutoCodec.Strategy.PUBLIC_FIELDS)
   public static class Options extends FragmentOptions {
+    @Option(
+        name = "experimental_enable_android_cpu_make_variable",
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS},
+        metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
+        defaultValue = "true",
+        help = "Flag to roll out the removal of the ANDROID_CPU Make variable.")
+    public boolean enableAndroidCpuMakeVariable;
+
     @Option(
       name = "Android configuration distinguisher",
       defaultValue = "MAIN",
@@ -290,7 +309,6 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
     @Option(
       name = "android_crosstool_top",
       defaultValue = "//external:android/crosstool",
-      category = "semantics",
       converter = EmptyToNullLabelConverter.class,
       documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
       effectTags = {
@@ -306,7 +324,6 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
     @Option(
       name = "android_cpu",
       defaultValue = "armeabi-v7a",
-      category = "semantics",
       documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
       effectTags = {
         OptionEffectTag.AFFECTS_OUTPUTS,
@@ -320,7 +337,6 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
     @Option(
       name = "android_compiler",
       defaultValue = "null",
-      category = "semantics",
       documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
       effectTags = {
         OptionEffectTag.AFFECTS_OUTPUTS,
@@ -335,7 +351,6 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
       name = "android_grte_top",
       defaultValue = "null",
       converter = LibcTopLabelConverter.class,
-      category = "semantics",
       documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
       effectTags = {
         OptionEffectTag.CHANGES_INPUTS,
@@ -369,7 +384,6 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
     @Option(
       name = "android_sdk",
       defaultValue = "@bazel_tools//tools/android:sdk",
-      category = "version",
       converter = LabelConverter.class,
       documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
       effectTags = {
@@ -386,7 +400,6 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
       name = "fat_apk_cpu",
       converter = Converters.CommaSeparatedOptionListConverter.class,
       defaultValue = "armeabi-v7a",
-      category = "semantics",
       documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
       effectTags = {
         OptionEffectTag.AFFECTS_OUTPUTS,
@@ -449,7 +462,6 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
     @Option(
       name = "incremental_dexing",
       defaultValue = "true",
-      category = "semantics",
       documentationCategory = OptionDocumentationCategory.BUILD_TIME_OPTIMIZATION,
       effectTags = {
         OptionEffectTag.AFFECTS_OUTPUTS,
@@ -513,7 +525,6 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
 
     @Option(
       name = "experimental_android_use_parallel_dex2oat",
-      category = "experimental",
       defaultValue = "false",
       documentationCategory = OptionDocumentationCategory.TESTING,
       effectTags = {
@@ -531,7 +542,6 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
       name = "non_incremental_per_target_dexopts",
       converter = Converters.CommaSeparatedOptionListConverter.class,
       defaultValue = "--positions",
-      category = "semantics",
       documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
       effectTags = {
         OptionEffectTag.LOADING_AND_ANALYSIS,
@@ -629,7 +639,6 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
     @Option(
       name = "android_resource_shrinking",
       defaultValue = "false",
-      category = "semantics",
       documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
       effectTags = {
         OptionEffectTag.AFFECTS_OUTPUTS,
@@ -642,7 +651,6 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
     @Option(
       name = "experimental_android_resource_cycle_shrinking",
       defaultValue = "false",
-      category = "semantics",
       documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
       effectTags = {
         OptionEffectTag.AFFECTS_OUTPUTS,
@@ -658,7 +666,6 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
     @Option(
       name = "android_manifest_merger",
       defaultValue = "android",
-      category = "semantics",
       converter = AndroidManifestMergerConverter.class,
       documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
       effectTags = {
@@ -675,7 +682,6 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
     @Option(
       name = "android_aapt",
       defaultValue = "aapt",
-      category = "semantics",
       documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
       effectTags = {
         OptionEffectTag.AFFECTS_OUTPUTS,
@@ -798,6 +804,45 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
     )
     public AndroidRobolectricTestDeprecationLevel robolectricTestDeprecationLevel;
 
+    @Option(
+        name = "android_decouple_data_processing",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {
+          OptionEffectTag.BAZEL_INTERNAL_CONFIGURATION,
+          OptionEffectTag.ACTION_COMMAND_LINES
+        },
+        help =
+            "If true, Android data (assets, resources, and manifests) will be processed seperately "
+                + "when possible. Otherwise, they will all be processed together.")
+    public boolean decoupleDataProcessing;
+
+    @Option(
+      name = "android_migration_tag_check",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {
+        OptionEffectTag.EAGERNESS_TO_EXIT,
+      },
+      help = "If enabled, strict usage of the Skylark migration tag is enabled for android rules."
+    )
+    public boolean checkForMigrationTag;
+
+    // TODO(eaftan): enable this by default and delete it
+    @Option(
+      name = "experimental_one_version_enforcement_use_transitive_jars_for_binary_under_test",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {
+        OptionEffectTag.BAZEL_INTERNAL_CONFIGURATION,
+        OptionEffectTag.ACTION_COMMAND_LINES
+      },
+      help =
+          "If enabled, one version enforcement for android_test uses the binary_under_test's "
+              + "transitive classpath, otherwise it uses the deploy jar"
+    )
+    public boolean oneVersionEnforcementUseTransitiveJarsForBinaryUnderTest;
+
     @Override
     public FragmentOptions getHost() {
       Options host = (Options) super.getHost();
@@ -820,6 +865,8 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
       host.manifestMerger = manifestMerger;
       host.androidAaptVersion = androidAaptVersion;
       host.allowAndroidLibraryDepsWithoutSrcs = allowAndroidLibraryDepsWithoutSrcs;
+      host.oneVersionEnforcementUseTransitiveJarsForBinaryUnderTest =
+          oneVersionEnforcementUseTransitiveJarsForBinaryUnderTest;
       return host;
     }
   }
@@ -827,7 +874,7 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
   /** Configuration loader for the Android fragment. */
   public static class Loader implements ConfigurationFragmentFactory {
     @Override
-    public Fragment create(ConfigurationEnvironment env, BuildOptions buildOptions)
+    public Fragment create(BuildOptions buildOptions)
         throws InvalidConfigurationException, InterruptedException {
       return new AndroidConfiguration(buildOptions.get(Options.class));
     }
@@ -843,6 +890,7 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
     }
   }
 
+  private final boolean enableAndroidCpuMakeVariable;
   private final Label sdk;
   private final String cpu;
   private final boolean useIncrementalNativeLibs;
@@ -875,8 +923,12 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
   private final boolean skipParsingAction;
   private final boolean fixedResourceNeverlinking;
   private final AndroidRobolectricTestDeprecationLevel robolectricTestDeprecationLevel;
+  private final boolean decoupleDataProcessing;
+  private final boolean checkForMigrationTag;
+  private final boolean oneVersionEnforcementUseTransitiveJarsForBinaryUnderTest;
 
   AndroidConfiguration(Options options) throws InvalidConfigurationException {
+    this.enableAndroidCpuMakeVariable = options.enableAndroidCpuMakeVariable;
     this.sdk = options.sdk;
     this.useIncrementalNativeLibs = options.incrementalNativeLibs;
     this.cpu = options.cpu;
@@ -912,6 +964,10 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
     this.skipParsingAction = options.skipParsingAction;
     this.fixedResourceNeverlinking = options.fixedResourceNeverlinking;
     this.robolectricTestDeprecationLevel = options.robolectricTestDeprecationLevel;
+    this.decoupleDataProcessing = options.decoupleDataProcessing;
+    this.checkForMigrationTag = options.checkForMigrationTag;
+    this.oneVersionEnforcementUseTransitiveJarsForBinaryUnderTest =
+        options.oneVersionEnforcementUseTransitiveJarsForBinaryUnderTest;
 
     if (incrementalDexingShardsAfterProguard < 0) {
       throw new InvalidConfigurationException(
@@ -930,6 +986,7 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
 
   @AutoCodec.Instantiator
   AndroidConfiguration(
+      boolean enableAndroidCpuMakeVariable,
       Label sdk,
       String cpu,
       boolean useIncrementalNativeLibs,
@@ -961,7 +1018,11 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
       boolean useParallelDex2Oat,
       boolean skipParsingAction,
       boolean fixedResourceNeverlinking,
-      AndroidRobolectricTestDeprecationLevel robolectricTestDeprecationLevel) {
+      AndroidRobolectricTestDeprecationLevel robolectricTestDeprecationLevel,
+      boolean decoupleDataProcessing,
+      boolean checkForMigrationTag,
+      boolean oneVersionEnforcementUseTransitiveJarsForBinaryUnderTest) {
+    this.enableAndroidCpuMakeVariable = enableAndroidCpuMakeVariable;
     this.sdk = sdk;
     this.cpu = cpu;
     this.useIncrementalNativeLibs = useIncrementalNativeLibs;
@@ -994,6 +1055,10 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
     this.skipParsingAction = skipParsingAction;
     this.fixedResourceNeverlinking = fixedResourceNeverlinking;
     this.robolectricTestDeprecationLevel = robolectricTestDeprecationLevel;
+    this.decoupleDataProcessing = decoupleDataProcessing;
+    this.checkForMigrationTag = checkForMigrationTag;
+    this.oneVersionEnforcementUseTransitiveJarsForBinaryUnderTest =
+        oneVersionEnforcementUseTransitiveJarsForBinaryUnderTest;
   }
 
   public String getCpu() {
@@ -1141,8 +1206,24 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
     return robolectricTestDeprecationLevel;
   }
 
+  public boolean decoupleDataProcessing() {
+    return decoupleDataProcessing;
+  }
+
+  public boolean checkForMigrationTag() {
+    return checkForMigrationTag;
+  }
+
+  public boolean getOneVersionEnforcementUseTransitiveJarsForBinaryUnderTest() {
+    return oneVersionEnforcementUseTransitiveJarsForBinaryUnderTest;
+  }
+
   @Override
   public void addGlobalMakeVariables(ImmutableMap.Builder<String, String> globalMakeEnvBuilder) {
+    if (!enableAndroidCpuMakeVariable) {
+      return;
+    }
+
     globalMakeEnvBuilder.put("ANDROID_CPU", cpu);
   }
 

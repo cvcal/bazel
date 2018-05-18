@@ -19,6 +19,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
+import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.Dependency;
 import com.google.devtools.build.lib.analysis.DependencyResolver.InconsistentAspectOrderException;
@@ -31,12 +32,9 @@ import com.google.devtools.build.lib.analysis.config.InvalidConfigurationExcepti
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.BuildType;
-import com.google.devtools.build.lib.packages.NoSuchTargetException;
-import com.google.devtools.build.lib.packages.Package;
 import com.google.devtools.build.lib.packages.RawAttributeMapper;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.RuleClassProvider;
-import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.skyframe.SkyframeActionExecutor.ConflictException;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.util.OrderedSetMultimap;
@@ -95,18 +93,14 @@ public class PostConfiguredTargetFunction implements SkyFunction {
     }
 
     ConfiguredTarget ct = ctValue.getConfiguredTarget();
-
-    Package targetPkg =
-        ((PackageValue) env.getValue(PackageValue.key(ct.getLabel().getPackageIdentifier())))
-            .getPackage();
-    Target target = null;
-    try {
-      target = targetPkg.getTarget(ct.getLabel().getName());
-    } catch (NoSuchTargetException e) {
-      throw new IllegalStateException("Name already verified", e);
+    ConfiguredTargetAndData configuredTargetAndData =
+        ConfiguredTargetAndData.fromConfiguredTargetInSkyframe(ct, env);
+    if (configuredTargetAndData == null) {
+      return null;
     }
-
-    TargetAndConfiguration ctgValue = new TargetAndConfiguration(target, ct.getConfiguration());
+    TargetAndConfiguration ctgValue =
+        new TargetAndConfiguration(
+            configuredTargetAndData.getTarget(), configuredTargetAndData.getConfiguration());
 
     ImmutableMap<Label, ConfigMatchingProvider> configConditions =
         getConfigurableAttributeConditions(ctgValue, env);
@@ -117,7 +111,9 @@ public class PostConfiguredTargetFunction implements SkyFunction {
     OrderedSetMultimap<Attribute, Dependency> deps;
     try {
       BuildConfiguration hostConfiguration =
-          buildViewProvider.getSkyframeBuildView().getHostConfiguration(ct.getConfiguration());
+          buildViewProvider
+              .getSkyframeBuildView()
+              .getHostConfiguration(configuredTargetAndData.getConfiguration());
       SkyframeDependencyResolver resolver =
           buildViewProvider.getSkyframeBuildView().createDependencyResolver(env);
       // We don't track root causes here - this function is only invoked for successfully analyzed
@@ -130,8 +126,9 @@ public class PostConfiguredTargetFunction implements SkyFunction {
               /*aspect=*/ null,
               configConditions,
               /*toolchainLabels*/ ImmutableSet.of(),
-              defaultBuildOptions);
-      if (ct.getConfiguration() != null) {
+              defaultBuildOptions,
+              ((ConfiguredRuleClassProvider) ruleClassProvider).getTrimmingTransitionFactory());
+      if (configuredTargetAndData.getConfiguration() != null) {
         deps =
             ConfigurationResolver.resolveConfigurations(
                 env, ctgValue, deps, hostConfiguration, ruleClassProvider, defaultBuildOptions);

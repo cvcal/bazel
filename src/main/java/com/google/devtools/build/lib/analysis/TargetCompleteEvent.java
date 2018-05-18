@@ -29,7 +29,7 @@ import com.google.devtools.build.lib.analysis.test.InstrumentedFilesProvider;
 import com.google.devtools.build.lib.analysis.test.TestProvider;
 import com.google.devtools.build.lib.buildeventstream.ArtifactGroupNamer;
 import com.google.devtools.build.lib.buildeventstream.BuildEvent;
-import com.google.devtools.build.lib.buildeventstream.BuildEventConverters;
+import com.google.devtools.build.lib.buildeventstream.BuildEventContext;
 import com.google.devtools.build.lib.buildeventstream.BuildEventId;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.File;
@@ -46,9 +46,10 @@ import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.packages.AttributeMap;
 import com.google.devtools.build.lib.packages.ConfiguredAttributeMapper;
 import com.google.devtools.build.lib.packages.Rule;
-import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.packages.TestSize;
+import com.google.devtools.build.lib.packages.TestTimeout;
 import com.google.devtools.build.lib.rules.AliasConfiguredTarget;
+import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.skyframe.SkyValue;
 import java.util.Collection;
@@ -60,29 +61,26 @@ public final class TargetCompleteEvent
         BuildEventWithOrderConstraint,
         EventReportingArtifacts,
         BuildEventWithConfiguration {
-  private final ConfiguredTarget target;
-  private final Target actualTarget;
+  private final ConfiguredTargetAndData targetAndData;
   private final NestedSet<Cause> rootCauses;
   private final ImmutableList<BuildEventId> postedAfter;
-  private final Iterable<ArtifactsInOutputGroup> outputs;
+  private final NestedSet<ArtifactsInOutputGroup> outputs;
   private final NestedSet<Artifact> baselineCoverageArtifacts;
   private final boolean isTest;
 
   private TargetCompleteEvent(
-      ConfiguredTarget target,
-      Target actualTarget,
+      ConfiguredTargetAndData targetAndData,
       NestedSet<Cause> rootCauses,
-      Iterable<ArtifactsInOutputGroup> outputs,
+      NestedSet<ArtifactsInOutputGroup> outputs,
       boolean isTest) {
-    this.target = target;
-    this.actualTarget = actualTarget;
+    this.targetAndData = targetAndData;
     this.rootCauses =
         (rootCauses == null) ? NestedSetBuilder.<Cause>emptySet(Order.STABLE_ORDER) : rootCauses;
 
     ImmutableList.Builder<BuildEventId> postedAfterBuilder = ImmutableList.builder();
     Label label = getTarget().getLabel();
-    if (target instanceof AliasConfiguredTarget) {
-      label = ((AliasConfiguredTarget) target).getOriginalLabel();
+    if (targetAndData.getConfiguredTarget() instanceof AliasConfiguredTarget) {
+      label = ((AliasConfiguredTarget) targetAndData.getConfiguredTarget()).getOriginalLabel();
     }
     postedAfterBuilder.add(BuildEventId.targetConfigured(label));
     for (Cause cause : getRootCauses()) {
@@ -92,7 +90,7 @@ public final class TargetCompleteEvent
     this.outputs = outputs;
     this.isTest = isTest;
     InstrumentedFilesProvider instrumentedFilesProvider =
-        this.target.getProvider(InstrumentedFilesProvider.class);
+        this.targetAndData.getConfiguredTarget().getProvider(InstrumentedFilesProvider.class);
     if (instrumentedFilesProvider == null) {
       this.baselineCoverageArtifacts = null;
     } else {
@@ -108,29 +106,29 @@ public final class TargetCompleteEvent
 
   /** Construct a successful target completion event. */
   public static TargetCompleteEvent successfulBuild(
-      ConfiguredTarget ct, Target target, NestedSet<ArtifactsInOutputGroup> outputs) {
-    return new TargetCompleteEvent(ct, target, null, outputs, false);
+      ConfiguredTargetAndData ct, NestedSet<ArtifactsInOutputGroup> outputs) {
+    return new TargetCompleteEvent(ct, null, outputs, false);
   }
 
   /** Construct a successful target completion event for a target that will be tested. */
   public static TargetCompleteEvent successfulBuildSchedulingTest(
-      ConfiguredTarget ct, Target target, NestedSet<ArtifactsInOutputGroup> outputs) {
-    return new TargetCompleteEvent(ct, target, null, outputs, true);
+      ConfiguredTargetAndData ct, NestedSet<ArtifactsInOutputGroup> outputs) {
+    return new TargetCompleteEvent(ct, null, outputs, true);
   }
 
   /**
    * Construct a target completion event for a failed target, with the given non-empty root causes.
    */
   public static TargetCompleteEvent createFailed(
-      ConfiguredTarget ct, Target target, NestedSet<Cause> rootCauses) {
+      ConfiguredTargetAndData ct, NestedSet<Cause> rootCauses) {
     Preconditions.checkArgument(!Iterables.isEmpty(rootCauses));
     return new TargetCompleteEvent(
-        ct, target, rootCauses, ImmutableList.<ArtifactsInOutputGroup>of(), false);
+        ct, rootCauses, NestedSetBuilder.emptySet(Order.STABLE_ORDER), false);
   }
 
   /** Returns the target associated with the event. */
   public ConfiguredTarget getTarget() {
-    return target;
+    return targetAndData.getConfiguredTarget();
   }
 
   /** Determines whether the target has failed or succeeded. */
@@ -143,13 +141,26 @@ public final class TargetCompleteEvent
     return rootCauses;
   }
 
+  public Iterable<Artifact> getLegacyFilteredImportantArtifacts() {
+    // TODO(ulfjack): This duplicates code in ArtifactsToBuild.
+    NestedSetBuilder<Artifact> builder = new NestedSetBuilder<>(outputs.getOrder());
+    for (ArtifactsInOutputGroup artifactsInOutputGroup : outputs) {
+      if (artifactsInOutputGroup.areImportant()) {
+        builder.addTransitive(artifactsInOutputGroup.getArtifacts());
+      }
+    }
+    return Iterables.filter(
+        builder.build(),
+        (artifact) -> !artifact.isSourceArtifact() && !artifact.isMiddlemanArtifact());
+  }
+
   @Override
   public BuildEventId getEventId() {
     Label label = getTarget().getLabel();
-    if (target instanceof AliasConfiguredTarget) {
-      label = ((AliasConfiguredTarget) target).getOriginalLabel();
+    if (targetAndData.getConfiguredTarget() instanceof AliasConfiguredTarget) {
+      label = ((AliasConfiguredTarget) targetAndData.getConfiguredTarget()).getOriginalLabel();
     }
-    BuildConfiguration config = getTarget().getConfiguration();
+    BuildConfiguration config = targetAndData.getConfiguration();
     BuildEventId configId =
         config == null ? BuildEventId.nullConfigurationId() : config.getEventId();
     return BuildEventId.targetCompleted(label, configId);
@@ -165,15 +176,18 @@ public final class TargetCompleteEvent
       // For tests, announce all the test actions that will minimally happen (except for
       // interruption). If after the result of a test action another attempt is necessary,
       // it will be announced with the action that made the new attempt necessary.
-      Label label = target.getLabel();
-      TestProvider.TestParams params = target.getProvider(TestProvider.class).getTestParams();
+      Label label = targetAndData.getConfiguredTarget().getLabel();
+      TestProvider.TestParams params =
+          targetAndData.getConfiguredTarget().getProvider(TestProvider.class).getTestParams();
       for (int run = 0; run < Math.max(params.getRuns(), 1); run++) {
         for (int shard = 0; shard < Math.max(params.getShards(), 1); shard++) {
           childrenBuilder.add(
-              BuildEventId.testResult(label, run, shard, target.getConfiguration().getEventId()));
+              BuildEventId.testResult(
+                  label, run, shard, targetAndData.getConfiguration().getEventId()));
         }
       }
-      childrenBuilder.add(BuildEventId.testSummary(label, target.getConfiguration().getEventId()));
+      childrenBuilder.add(
+          BuildEventId.testSummary(label, targetAndData.getConfiguration().getEventId()));
     }
     return childrenBuilder.build();
   }
@@ -182,7 +196,7 @@ public final class TargetCompleteEvent
   // field.
   private static void addImportantOutputs(
       BuildEventStreamProtos.TargetComplete.Builder builder,
-      BuildEventConverters converters,
+      BuildEventContext converters,
       Iterable<Artifact> artifacts) {
     addImportantOutputs(builder, Artifact::getRootRelativePathString, converters, artifacts);
   }
@@ -190,7 +204,7 @@ public final class TargetCompleteEvent
   private static void addImportantOutputs(
       BuildEventStreamProtos.TargetComplete.Builder builder,
       Function<Artifact, String> artifactNameFunction,
-      BuildEventConverters converters,
+      BuildEventContext converters,
       Iterable<Artifact> artifacts) {
     for (Artifact artifact : artifacts) {
       String name = artifactNameFunction.apply(artifact);
@@ -200,31 +214,30 @@ public final class TargetCompleteEvent
   }
 
   @Override
-  public BuildEventStreamProtos.BuildEvent asStreamProto(BuildEventConverters converters) {
+  public BuildEventStreamProtos.BuildEvent asStreamProto(BuildEventContext converters) {
     BuildEventStreamProtos.TargetComplete.Builder builder =
         BuildEventStreamProtos.TargetComplete.newBuilder();
 
     builder.setSuccess(!failed());
-    builder.setTargetKind(actualTarget.getTargetKind());
+    builder.setTargetKind(targetAndData.getTarget().getTargetKind());
     builder.addAllTag(getTags());
     builder.addAllOutputGroup(getOutputFilesByGroup(converters.artifactGroupNamer()));
 
     if (isTest) {
+      builder.setTestTimeoutSeconds(getTestTimeoutSeconds(targetAndData));
       builder.setTestSize(
           TargetConfiguredEvent.bepTestSize(
-              TestSize.getTestSize(actualTarget.getAssociatedRule())));
+              TestSize.getTestSize(targetAndData.getTarget().getAssociatedRule())));
     }
 
     // TODO(aehlig): remove direct reporting of artifacts as soon as clients no longer
     // need it.
-    for (ArtifactsInOutputGroup group : outputs) {
-      if (group.areImportant()) {
-        addImportantOutputs(builder, converters, group.getArtifacts());
+    if (converters.getOptions().legacyImportantOutputs) {
+      addImportantOutputs(builder, converters, getLegacyFilteredImportantArtifacts());
+      if (baselineCoverageArtifacts != null) {
+        addImportantOutputs(
+            builder, (artifact -> BASELINE_COVERAGE), converters, baselineCoverageArtifacts);
       }
-    }
-    if (baselineCoverageArtifacts != null) {
-      addImportantOutputs(
-          builder, (artifact -> BASELINE_COVERAGE), converters, baselineCoverageArtifacts);
     }
 
     BuildEventStreamProtos.TargetComplete complete = builder.build();
@@ -251,9 +264,9 @@ public final class TargetCompleteEvent
 
   @Override
   public Collection<BuildEvent> getConfigurations() {
-    BuildConfiguration configuration = target.getConfiguration();
+    BuildConfiguration configuration = targetAndData.getConfiguration();
     if (configuration != null) {
-      return ImmutableList.of(target.getConfiguration().toBuildEvent());
+      return ImmutableList.of(targetAndData.getConfiguration().toBuildEvent());
     } else {
       return ImmutableList.<BuildEvent>of();
     }
@@ -261,12 +274,13 @@ public final class TargetCompleteEvent
 
   private Iterable<String> getTags() {
     // We are only interested in targets that are rules.
-    if (!(target instanceof RuleConfiguredTarget)) {
+    if (!(targetAndData.getConfiguredTarget() instanceof RuleConfiguredTarget)) {
       return ImmutableList.<String>of();
     }
     AttributeMap attributes =
         ConfiguredAttributeMapper.of(
-            (Rule) actualTarget, ((RuleConfiguredTarget) target).getConfigConditions());
+            (Rule) targetAndData.getTarget(),
+            ((RuleConfiguredTarget) targetAndData.getConfiguredTarget()).getConfigConditions());
     // Every rule (implicitly) has a "tags" attribute.
     return attributes.get("tags", Type.STRING_LIST);
   }
@@ -291,5 +305,18 @@ public final class TargetCompleteEvent
               .build());
     }
     return groups.build();
+  }
+
+  /**
+   * Returns timeout value in seconds that should be used for all test actions under this configured
+   * target. We always use the "categorical timeouts" which are based on the --test_timeout flag. A
+   * rule picks its timeout but ends up with the same effective value as all other rules in that
+   * category and configuration.
+   */
+  private Long getTestTimeoutSeconds(ConfiguredTargetAndData targetAndData) {
+    BuildConfiguration configuration = targetAndData.getConfiguration();
+    Rule associatedRule = targetAndData.getTarget().getAssociatedRule();
+    TestTimeout categoricalTimeout = TestTimeout.getTestTimeout(associatedRule);
+    return configuration.getTestTimeout().get(categoricalTimeout).getSeconds();
   }
 }

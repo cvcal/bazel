@@ -14,7 +14,6 @@
 
 package com.google.devtools.build.lib.worker;
 
-import com.google.common.base.Preconditions;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -44,8 +43,10 @@ final class SandboxedWorker extends Worker {
       Set<PathFragment> outputFiles,
       Set<PathFragment> workerFiles)
       throws IOException {
-    Preconditions.checkState(workerExecRoot == null);
-    this.workerExecRoot = new WorkerExecRoot(workDir, inputFiles, outputFiles, workerFiles);
+    // Note that workerExecRoot isn't necessarily null at this point, so we can't do a Preconditions
+    // check for it: If a WorkerSpawnStrategy gets interrupted, finishExecution is not guaranteed to
+    // be called.
+    workerExecRoot = new WorkerExecRoot(workDir, inputFiles, outputFiles, workerFiles);
     workerExecRoot.createFileSystem();
 
     super.prepareExecution(inputFiles, outputFiles, workerFiles);

@@ -22,7 +22,6 @@ import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.analysis.config.HostTransition;
 import com.google.devtools.build.lib.analysis.config.transitions.PatchTransition;
 import com.google.devtools.build.lib.analysis.config.transitions.SplitTransition;
-import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.Attribute.AllowedValueSet;
@@ -35,15 +34,8 @@ import com.google.devtools.build.lib.packages.Provider;
 import com.google.devtools.build.lib.packages.SkylarkAspect;
 import com.google.devtools.build.lib.packages.SkylarkProviderIdentifier;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
-import com.google.devtools.build.lib.skylarkinterface.Param;
-import com.google.devtools.build.lib.skylarkinterface.ParamType;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
+import com.google.devtools.build.lib.skylarkbuildapi.SkylarkAttrApi;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkPrinter;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkSignature;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkValue;
-import com.google.devtools.build.lib.syntax.BuiltinFunction;
 import com.google.devtools.build.lib.syntax.Environment;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.EvalUtils;
@@ -52,7 +44,6 @@ import com.google.devtools.build.lib.syntax.Runtime;
 import com.google.devtools.build.lib.syntax.SkylarkCallbackFunction;
 import com.google.devtools.build.lib.syntax.SkylarkDict;
 import com.google.devtools.build.lib.syntax.SkylarkList;
-import com.google.devtools.build.lib.syntax.SkylarkSignatureProcessor;
 import com.google.devtools.build.lib.syntax.SkylarkType;
 import com.google.devtools.build.lib.syntax.SkylarkUtils;
 import com.google.devtools.build.lib.syntax.Type;
@@ -72,82 +63,9 @@ import javax.annotation.Nullable;
  * The functions are executed through reflection. As everywhere in Skylark, arguments are
  * type-checked with the signature and cannot be null.
  */
-@SkylarkModule(
-  name = "attr",
-  namespace = true,
-  category = SkylarkModuleCategory.BUILTIN,
-  doc =
-      "Module for creating new attributes. "
-          + "They are only for use with <a href=\"globals.html#rule\">rule</a> or "
-          + "<a href=\"globals.html#aspect\">aspect</a>. "
-          + "<a href=\"https://github.com/bazelbuild/examples/tree/master/rules/"
-          + "attributes/printer.bzl\">See example of use</a>."
-)
-public final class SkylarkAttr implements SkylarkValue {
+public final class SkylarkAttr implements SkylarkAttrApi {
 
   // Arguments
-
-  private static final String ALLOW_FILES_ARG = "allow_files";
-  private static final String ALLOW_FILES_DOC =
-      "Whether File targets are allowed. Can be True, False (default), or a list of file "
-      + "extensions that are allowed (for example, <code>[\".cc\", \".cpp\"]</code>).";
-
-  private static final String ALLOW_RULES_ARG = "allow_rules";
-  private static final String ALLOW_RULES_DOC =
-      "Which rule targets (name of the classes) are allowed. This is deprecated (kept only for "
-          + "compatibility), use providers instead.";
-
-  private static final String ASPECTS_ARG = "aspects";
-  private static final String ASPECTS_ARG_DOC =
-      "Aspects that should be applied to the dependency or dependencies specified by this "
-          + "attribute.";
-
-  private static final String CONFIGURATION_ARG = "cfg";
-  private static final String CONFIGURATION_DOC =
-      "<a href=\"../rules.$DOC_EXT#configurations\">Configuration</a> of the attribute. It can be "
-          + "either <code>\"data\"</code>, <code>\"host\"</code>, or <code>\"target\"</code>.";
-
-  private static final String DEFAULT_ARG = "default";
-  // A trailing space is required because it's often prepended to other sentences
-  private static final String DEFAULT_DOC = "The default value of the attribute. ";
-
-  private static final String DOC_ARG = "doc";
-  private static final String DOC_DOC =
-      "A description of the attribute that can be extracted by documentation generating tools.";
-
-  private static final String EXECUTABLE_ARG = "executable";
-  private static final String EXECUTABLE_DOC =
-      "True if the label has to be executable. This means the label must refer to an "
-          + "executable file, or to a rule that outputs an executable file. Access the label "
-          + "with <code>ctx.executable.&lt;attribute_name&gt;</code>.";
-
-  private static final String FLAGS_ARG = "flags";
-  private static final String FLAGS_DOC = "Deprecated, will be removed.";
-
-  private static final String MANDATORY_ARG = "mandatory";
-  private static final String MANDATORY_DOC = "True if the value must be explicitly specified.";
-
-  private static final String NON_EMPTY_ARG = "non_empty";
-  private static final String NON_EMPTY_DOC =
-      "True if the attribute must not be empty. Deprecated: Use allow_empty instead.";
-
-  private static final String ALLOW_EMPTY_ARG = "allow_empty";
-  private static final String ALLOW_EMPTY_DOC = "True if the attribute can be empty.";
-
-  private static final String PROVIDERS_ARG = "providers";
-  private static final String PROVIDERS_DOC =
-      "Mandatory providers list. It should be either a list of providers, or a "
-          + "list of lists of providers. Every dependency should provide ALL providers "
-          + "from at least ONE of these lists. A single list of providers will be "
-          + "automatically converted to a list containing one list of providers.";
-
-  private static final String SINGLE_FILE_ARG = "single_file";
-  private static final String ALLOW_SINGLE_FILE_ARG = "allow_single_file";
-
-  private static final String VALUES_ARG = "values";
-  private static final String VALUES_DOC =
-      "The list of allowed values for the attribute. An error is raised if any other "
-          + "value is given.";
 
   private static boolean containsNonNoneKey(SkylarkDict<String, Object> arguments, String key) {
     return arguments.containsKey(key) && arguments.get(key) != Runtime.NONE;
@@ -474,50 +392,7 @@ public final class SkylarkAttr implements SkylarkValue {
     printer.append("<attr>");
   }
 
-  @SkylarkCallable(
-    name = "int",
-    doc = "Creates an attribute of type int.",
-    parameters = {
-      @Param(
-        name = DEFAULT_ARG,
-        allowedTypes = {
-          @ParamType(type = Integer.class),
-          @ParamType(type = UserDefinedFunction.class)
-        },
-        defaultValue = "0",
-        doc = DEFAULT_DOC,
-        named = true,
-        positional = false
-      ),
-      @Param(
-        name = DOC_ARG,
-        type = String.class,
-        defaultValue = "''",
-        doc = DOC_DOC,
-        named = true,
-        positional = false
-      ),
-      @Param(
-        name = MANDATORY_ARG,
-        type = Boolean.class,
-        defaultValue = "False",
-        doc = MANDATORY_DOC,
-        named = true,
-        positional = false
-      ),
-      @Param(
-        name = VALUES_ARG,
-        type = SkylarkList.class,
-        generic1 = Integer.class,
-        defaultValue = "[]",
-        doc = VALUES_DOC,
-        named = true,
-        positional = false
-      )
-    },
-    useAst = true,
-    useEnvironment = true
-  )
+  @Override
   public Descriptor intAttribute(
       Integer defaultInt,
       String doc,
@@ -537,92 +412,7 @@ public final class SkylarkAttr implements SkylarkValue {
         env);
   }
 
-  @SkylarkSignature(
-    name = "configuration_field",
-    returnType = SkylarkLateBoundDefault.class,
-    // TODO(cparsons): Provide a link to documentation for available SkylarkConfigurationFields.
-    doc = "References a late-bound default value for an attribute of type "
-      + "<a href=\"attr.html#label\">label</a>. A value is 'late-bound' if it requires "
-      + "the configuration to be built before determining the value. Any attribute using this "
-      + "as a value must <a href=\"../rules.html#private-attributes\">be private</a>.",
-    parameters = {
-        @Param(
-            name = "fragment",
-            type = String.class,
-            doc = "The name of a configuration fragment which contains the late-bound value."
-        ),
-        @Param(
-            name = "name",
-            type = String.class,
-            doc = "The name of the value to obtain from the configuration fragment."),
-    },
-    useLocation = true,
-    useEnvironment = true
-  )
-  private static final BuiltinFunction configurationField =
-      new BuiltinFunction("configuration_field") {
-        public SkylarkLateBoundDefault<?> invoke(
-            String fragment, String name, Location loc, Environment env)
-            throws EvalException {
-          Class<?> fragmentClass = SkylarkUtils.getFragmentMap(env).get(fragment);
-
-          if (fragmentClass == null) {
-            throw new EvalException(
-                loc,
-                String.format("invalid configuration fragment name '%s'", fragment));
-          }
-          try {
-            return SkylarkLateBoundDefault.forConfigurationField(
-                fragmentClass, name, SkylarkUtils.getToolsRepository(env));
-          } catch (SkylarkLateBoundDefault.InvalidConfigurationFieldException exception) {
-            throw new EvalException(loc, exception);
-          }
-        }
-      };
-
-  @SkylarkCallable(
-    name = "string",
-    doc = "Creates an attribute of type <a href=\"string.html\">string</a>.",
-    parameters = {
-      @Param(
-        name = DEFAULT_ARG,
-        allowedTypes = {
-          @ParamType(type = String.class),
-        },
-        defaultValue = "''",
-        doc = DEFAULT_DOC,
-        named = true,
-        positional = false
-      ),
-      @Param(
-        name = DOC_ARG,
-        type = String.class,
-        defaultValue = "''",
-        doc = DOC_DOC,
-        named = true,
-        positional = false
-      ),
-      @Param(
-        name = MANDATORY_ARG,
-        type = Boolean.class,
-        defaultValue = "False",
-        doc = MANDATORY_DOC,
-        named = true,
-        positional = false
-      ),
-      @Param(
-        name = VALUES_ARG,
-        type = SkylarkList.class,
-        generic1 = String.class,
-        defaultValue = "[]",
-        doc = VALUES_DOC,
-        named = true,
-        positional = false
-      )
-    },
-    useAst = true,
-    useEnvironment = true
-  )
+  @Override
   public Descriptor stringAttribute(
       String defaultString,
       String doc,
@@ -641,128 +431,7 @@ public final class SkylarkAttr implements SkylarkValue {
         env);
   }
 
-  @SkylarkCallable(
-    name = "label",
-    doc =
-        "Creates an attribute of type <a href=\"Target.html\">Target</a> which is the target "
-            + "referred to by the label. "
-            + "It is the only way to specify a dependency to another target. "
-            + "If you need a dependency that the user cannot overwrite, "
-            + "<a href=\"../rules.$DOC_EXT#private-attributes\">make the attribute private</a>.",
-    parameters = {
-      @Param(
-        name = DEFAULT_ARG,
-        allowedTypes = {
-          @ParamType(type = Label.class),
-          @ParamType(type = String.class),
-          @ParamType(type = SkylarkLateBoundDefault.class),
-          @ParamType(type = UserDefinedFunction.class)
-        },
-        callbackEnabled = true,
-        noneable = true,
-        defaultValue = "None",
-        named = true,
-        positional = false,
-        doc =
-            DEFAULT_DOC
-                + "Use a string or the <a href=\"globals.html#Label\"><code>Label</code></a> "
-                + "function to specify a default value, for example, "
-                + "<code>attr.label(default = \"//a:b\")</code>."
-      ),
-      @Param(
-        name = DOC_ARG,
-        type = String.class,
-        defaultValue = "''",
-        doc = DOC_DOC,
-        named = true,
-        positional = false
-      ),
-      @Param(
-        name = EXECUTABLE_ARG,
-        type = Boolean.class,
-        defaultValue = "False",
-        named = true,
-        positional = false,
-        doc = EXECUTABLE_DOC
-      ),
-      @Param(
-        name = ALLOW_FILES_ARG,
-        defaultValue = "None",
-        named = true,
-        positional = false,
-        noneable = true,
-        doc = ALLOW_FILES_DOC
-      ),
-      @Param(
-        name = ALLOW_SINGLE_FILE_ARG,
-        defaultValue = "None",
-        named = true,
-        positional = false,
-        noneable = true,
-        doc =
-            "This is similar to <code>allow_files</code>, with the restriction that the label must "
-                + "correspond to a single <a href=\"File.html\">File</a>. "
-                + "Access it through <code>ctx.file.&lt;attribute_name&gt;</code>."
-      ),
-      @Param(
-        name = MANDATORY_ARG,
-        type = Boolean.class,
-        defaultValue = "False",
-        named = true,
-        positional = false,
-        doc = MANDATORY_DOC
-      ),
-      @Param(
-        name = PROVIDERS_ARG,
-        type = SkylarkList.class,
-        defaultValue = "[]",
-        named = true,
-        positional = false,
-        doc = PROVIDERS_DOC
-      ),
-      @Param(
-        name = ALLOW_RULES_ARG,
-        type = SkylarkList.class,
-        generic1 = String.class,
-        noneable = true,
-        defaultValue = "None",
-        named = true,
-        positional = false,
-        doc = ALLOW_RULES_DOC
-      ),
-      @Param(
-        name = SINGLE_FILE_ARG,
-        type = Boolean.class,
-        defaultValue = "False",
-        named = true,
-        positional = false,
-        doc =
-            "Deprecated: Use <code>allow_single_file</code> instead. "
-                + "If True, the label must correspond to a single <a href=\"File.html\">File</a>. "
-                + "Access it through <code>ctx.file.&lt;attribute_name&gt;</code>."
-      ),
-      @Param(
-        name = CONFIGURATION_ARG,
-        type = Object.class,
-        noneable = true,
-        defaultValue = "None",
-        named = true,
-        positional = false,
-        doc = CONFIGURATION_DOC + " This parameter is required if <code>executable</code> is True."
-      ),
-      @Param(
-        name = ASPECTS_ARG,
-        type = SkylarkList.class,
-        generic1 = SkylarkAspect.class,
-        defaultValue = "[]",
-        named = true,
-        positional = false,
-        doc = ASPECTS_ARG_DOC
-      ),
-    },
-    useAst = true,
-    useEnvironment = true
-  )
+  @Override
   public Descriptor labelAttribute(
       Object defaultO,
       String doc,
@@ -814,62 +483,13 @@ public final class SkylarkAttr implements SkylarkValue {
     }
   }
 
-  @SkylarkCallable(
-    name = "string_list",
-    doc =
-        "Creates an attribute which is a <a href=\"list.html\">list</a> of "
-            + "<a href=\"string.html\">strings</a>.",
-    parameters = {
-      @Param(
-        name = DEFAULT_ARG,
-        allowedTypes = {
-          @ParamType(type = SkylarkList.class, generic1 = String.class),
-          @ParamType(type = UserDefinedFunction.class)
-        },
-        defaultValue = "[]",
-        doc = DEFAULT_DOC,
-        named = true,
-        positional = false
-      ),
-      @Param(
-        name = DOC_ARG,
-        type = String.class,
-        defaultValue = "''",
-        doc = DOC_DOC,
-        named = true,
-        positional = false
-      ),
-      @Param(
-        name = MANDATORY_ARG,
-        type = Boolean.class,
-        defaultValue = "False",
-        doc = MANDATORY_DOC,
-        named = true
-      ),
-      @Param(
-        name = NON_EMPTY_ARG,
-        type = Boolean.class,
-        defaultValue = "False",
-        doc = NON_EMPTY_DOC,
-        named = true
-      ),
-      @Param(
-        name = ALLOW_EMPTY_ARG,
-        type = Boolean.class,
-        defaultValue = "True",
-        doc = ALLOW_EMPTY_DOC,
-        named = true
-      )
-    },
-    useAst = true,
-    useEnvironment = true
-  )
+  @Override
   public Descriptor stringListAttribute(
-      SkylarkList<?> defaultList,
-      String doc,
       Boolean mandatory,
       Boolean nonEmpty,
       Boolean allowEmpty,
+      SkylarkList<?> defaultList,
+      String doc,
       FuncallExpression ast,
       Environment env)
       throws EvalException {
@@ -891,60 +511,13 @@ public final class SkylarkAttr implements SkylarkValue {
         env);
   }
 
-  @SkylarkCallable(
-    name = "int_list",
-    doc = "Creates an attribute which is a <a href=\"list.html\">list</a> of ints.",
-    parameters = {
-      @Param(
-        name = DEFAULT_ARG,
-        allowedTypes = {
-          @ParamType(type = SkylarkList.class, generic1 = Integer.class),
-          @ParamType(type = UserDefinedFunction.class)
-        },
-        defaultValue = "[]",
-        doc = DEFAULT_DOC,
-        named = true,
-        positional = false
-      ),
-      @Param(
-        name = DOC_ARG,
-        type = String.class,
-        defaultValue = "''",
-        doc = DOC_DOC,
-        named = true,
-        positional = false
-      ),
-      @Param(
-        name = MANDATORY_ARG,
-        type = Boolean.class,
-        defaultValue = "False",
-        doc = MANDATORY_DOC,
-        named = true
-      ),
-      @Param(
-        name = NON_EMPTY_ARG,
-        type = Boolean.class,
-        defaultValue = "False",
-        doc = NON_EMPTY_DOC,
-        named = true
-      ),
-      @Param(
-        name = ALLOW_EMPTY_ARG,
-        type = Boolean.class,
-        defaultValue = "True",
-        doc = ALLOW_EMPTY_DOC,
-        named = true
-      )
-    },
-    useAst = true,
-    useEnvironment = true
-  )
+  @Override
   public Descriptor intListAttribute(
-      SkylarkList<?> defaultList,
-      String doc,
       Boolean mandatory,
       Boolean nonEmpty,
       Boolean allowEmpty,
+      SkylarkList<?> defaultList,
+      String doc,
       FuncallExpression ast,
       Environment env)
       throws EvalException {
@@ -966,118 +539,9 @@ public final class SkylarkAttr implements SkylarkValue {
         env);
   }
 
-  @SkylarkCallable(
-    name = "label_list",
-    doc =
-        "Creates an attribute which is a <a href=\"list.html\">list</a> of type "
-            + "<a href=\"Target.html\">Target</a> which are specified by the labels in the list. "
-            + "See <a href=\"attr.html#label\">label</a> for more information.",
-    parameters = {
-      @Param(
-        name = DEFAULT_ARG,
-        allowedTypes = {
-          @ParamType(type = SkylarkList.class, generic1 = Label.class),
-          @ParamType(type = UserDefinedFunction.class)
-        },
-        callbackEnabled = true,
-        defaultValue = "[]",
-        named = true,
-        positional = false,
-        doc =
-            DEFAULT_DOC
-                + "Use strings or the <a href=\"globals.html#Label\"><code>Label</code></a> "
-                + "function to specify default values, for example, "
-                + "<code>attr.label_list(default = [\"//a:b\", \"//a:c\"])</code>."
-      ),
-      @Param(
-        name = DOC_ARG,
-        type = String.class,
-        defaultValue = "''",
-        doc = DOC_DOC,
-        named = true,
-        positional = false
-      ),
-      @Param(
-        name = ALLOW_FILES_ARG, // bool or FileType filter
-        defaultValue = "None",
-        named = true,
-        positional = false,
-        noneable = true,
-        doc = ALLOW_FILES_DOC
-      ),
-      @Param(
-        name = ALLOW_RULES_ARG,
-        type = SkylarkList.class,
-        generic1 = String.class,
-        noneable = true,
-        defaultValue = "None",
-        named = true,
-        positional = false,
-        doc = ALLOW_RULES_DOC
-      ),
-      @Param(
-        name = PROVIDERS_ARG,
-        type = SkylarkList.class,
-        defaultValue = "[]",
-        named = true,
-        positional = false,
-        doc = PROVIDERS_DOC
-      ),
-      @Param(
-        name = FLAGS_ARG,
-        type = SkylarkList.class,
-        generic1 = String.class,
-        defaultValue = "[]",
-        named = true,
-        positional = false,
-        doc = FLAGS_DOC
-      ),
-      @Param(
-        name = MANDATORY_ARG,
-        type = Boolean.class,
-        defaultValue = "False",
-        named = true,
-        positional = false,
-        doc = MANDATORY_DOC
-      ),
-      @Param(
-        name = NON_EMPTY_ARG,
-        type = Boolean.class,
-        defaultValue = "False",
-        named = true,
-        positional = false,
-        doc = NON_EMPTY_DOC
-      ),
-      @Param(
-        name = ALLOW_EMPTY_ARG,
-        type = Boolean.class,
-        defaultValue = "True",
-        doc = ALLOW_EMPTY_DOC,
-        named = true
-      ),
-      @Param(
-        name = CONFIGURATION_ARG,
-        type = Object.class,
-        noneable = true,
-        defaultValue = "None",
-        named = true,
-        positional = false,
-        doc = CONFIGURATION_DOC
-      ),
-      @Param(
-        name = ASPECTS_ARG,
-        type = SkylarkList.class,
-        generic1 = SkylarkAspect.class,
-        defaultValue = "[]",
-        named = true,
-        positional = false,
-        doc = ASPECTS_ARG_DOC
-      ),
-    },
-    useAst = true,
-    useEnvironment = true
-  )
+  @Override
   public Descriptor labelListAttribute(
+      Boolean allowEmpty,
       Object defaultList,
       String doc,
       Object allowFiles,
@@ -1086,7 +550,6 @@ public final class SkylarkAttr implements SkylarkValue {
       SkylarkList<?> flags,
       Boolean mandatory,
       Boolean nonEmpty,
-      Boolean allowEmpty,
       Object cfg,
       SkylarkList<?> aspects,
       FuncallExpression ast,
@@ -1125,120 +588,9 @@ public final class SkylarkAttr implements SkylarkValue {
     }
   }
 
-  @SkylarkCallable(
-    name = "label_keyed_string_dict",
-    doc =
-        "Creates an attribute which is a <a href=\"dict.html\">dict</a>. Its keys are type "
-            + "<a href=\"Target.html\">Target</a> and are specified by the label keys of the "
-            + "input dict. Its values are <a href=\"string.html\">strings</a>. See "
-            + "<a href=\"attr.html#label\">label</a> for more information.",
-    parameters = {
-      @Param(
-        name = DEFAULT_ARG,
-        allowedTypes = {
-          @ParamType(type = SkylarkDict.class),
-          @ParamType(type = UserDefinedFunction.class)
-        },
-        callbackEnabled = true,
-        defaultValue = "{}",
-        named = true,
-        positional = false,
-        doc =
-            DEFAULT_DOC
-                + "Use strings or the <a href=\"globals.html#Label\"><code>Label</code></a> "
-                + "function to specify default values, for example, "
-                + "<code>attr.label_keyed_string_dict(default = "
-                + "{\"//a:b\": \"value\", \"//a:c\": \"string\"})</code>."
-      ),
-      @Param(
-        name = DOC_ARG,
-        type = String.class,
-        defaultValue = "''",
-        doc = DOC_DOC,
-        named = true,
-        positional = false
-      ),
-      @Param(
-        name = ALLOW_FILES_ARG, // bool or FileType filter
-        defaultValue = "None",
-        named = true,
-        positional = false,
-        noneable = true,
-        doc = ALLOW_FILES_DOC
-      ),
-      @Param(
-        name = ALLOW_RULES_ARG,
-        type = SkylarkList.class,
-        generic1 = String.class,
-        noneable = true,
-        defaultValue = "None",
-        named = true,
-        positional = false,
-        doc = ALLOW_RULES_DOC
-      ),
-      @Param(
-        name = PROVIDERS_ARG,
-        type = SkylarkList.class,
-        defaultValue = "[]",
-        named = true,
-        positional = false,
-        doc = PROVIDERS_DOC
-      ),
-      @Param(
-        name = FLAGS_ARG,
-        type = SkylarkList.class,
-        generic1 = String.class,
-        defaultValue = "[]",
-        named = true,
-        positional = false,
-        doc = FLAGS_DOC
-      ),
-      @Param(
-        name = MANDATORY_ARG,
-        type = Boolean.class,
-        defaultValue = "False",
-        named = true,
-        positional = false,
-        doc = MANDATORY_DOC
-      ),
-      @Param(
-        name = NON_EMPTY_ARG,
-        type = Boolean.class,
-        defaultValue = "False",
-        named = true,
-        positional = false,
-        doc = NON_EMPTY_DOC
-      ),
-      @Param(
-        name = ALLOW_EMPTY_ARG,
-        type = Boolean.class,
-        defaultValue = "True",
-        doc = ALLOW_EMPTY_DOC,
-        named = true
-      ),
-      @Param(
-        name = CONFIGURATION_ARG,
-        type = Object.class,
-        noneable = true,
-        defaultValue = "None",
-        named = true,
-        positional = false,
-        doc = CONFIGURATION_DOC
-      ),
-      @Param(
-        name = ASPECTS_ARG,
-        type = SkylarkList.class,
-        generic1 = SkylarkAspect.class,
-        defaultValue = "[]",
-        named = true,
-        positional = false,
-        doc = ASPECTS_ARG_DOC
-      )
-    },
-    useAst = true,
-    useEnvironment = true
-  )
+  @Override
   public Descriptor labelKeyedStringDictAttribute(
+      Boolean allowEmpty,
       Object defaultList,
       String doc,
       Object allowFiles,
@@ -1247,7 +599,6 @@ public final class SkylarkAttr implements SkylarkValue {
       SkylarkList<?> flags,
       Boolean mandatory,
       Boolean nonEmpty,
-      Boolean allowEmpty,
       Object cfg,
       SkylarkList<?> aspects,
       FuncallExpression ast,
@@ -1287,41 +638,7 @@ public final class SkylarkAttr implements SkylarkValue {
     }
   }
 
-  @SkylarkCallable(
-    name = "bool",
-    doc = "Creates an attribute of type bool.",
-    parameters = {
-      @Param(
-        name = DEFAULT_ARG,
-        allowedTypes = {
-          @ParamType(type = Boolean.class),
-          @ParamType(type = UserDefinedFunction.class)
-        },
-        defaultValue = "False",
-        named = true,
-        positional = false,
-        doc = DEFAULT_DOC
-      ),
-      @Param(
-        name = DOC_ARG,
-        type = String.class,
-        defaultValue = "''",
-        doc = DOC_DOC,
-        named = true,
-        positional = false
-      ),
-      @Param(
-        name = MANDATORY_ARG,
-        type = Boolean.class,
-        defaultValue = "False",
-        named = true,
-        positional = false,
-        doc = MANDATORY_DOC
-      )
-    },
-    useAst = true,
-    useEnvironment = true
-  )
+  @Override
   public Descriptor boolAttribute(
       Boolean defaultO, String doc, Boolean mandatory, FuncallExpression ast, Environment env)
       throws EvalException {
@@ -1334,45 +651,7 @@ public final class SkylarkAttr implements SkylarkValue {
         env);
   }
 
-  @SkylarkCallable(
-    name = "output",
-    doc =
-        "Creates an attribute of type output. "
-            + "The user provides a file name (string) and the rule must create an action that "
-            + "generates the file.",
-    parameters = {
-      @Param(
-        name = DEFAULT_ARG,
-        allowedTypes = {
-          @ParamType(type = Label.class),
-          @ParamType(type = UserDefinedFunction.class)
-        },
-        noneable = true,
-        defaultValue = "None",
-        named = true,
-        positional = false,
-        doc = DEFAULT_DOC
-      ),
-      @Param(
-        name = DOC_ARG,
-        type = String.class,
-        defaultValue = "''",
-        doc = DOC_DOC,
-        named = true,
-        positional = false
-      ),
-      @Param(
-        name = MANDATORY_ARG,
-        type = Boolean.class,
-        defaultValue = "False",
-        named = true,
-        positional = false,
-        doc = MANDATORY_DOC
-      )
-    },
-    useAst = true,
-    useEnvironment = true
-  )
+  @Override
   public Descriptor outputAttribute(
       Object defaultO, String doc, Boolean mandatory, FuncallExpression ast, Environment env)
       throws EvalException {
@@ -1385,65 +664,13 @@ public final class SkylarkAttr implements SkylarkValue {
         env);
   }
 
-  @SkylarkCallable(
-    name = "output_list",
-    doc =
-        "Creates an attribute which is a <a href=\"list.html\">list</a> of outputs. "
-            + "See <a href=\"attr.html#output\">output</a> for more information.",
-    parameters = {
-      @Param(
-        name = DEFAULT_ARG,
-        allowedTypes = {
-          @ParamType(type = SkylarkList.class, generic1 = Label.class),
-          @ParamType(type = UserDefinedFunction.class)
-        },
-        generic1 = Label.class,
-        defaultValue = "[]",
-        named = true,
-        positional = false,
-        doc = DEFAULT_DOC
-      ),
-      @Param(
-        name = DOC_ARG,
-        type = String.class,
-        defaultValue = "''",
-        doc = DOC_DOC,
-        named = true,
-        positional = false
-      ),
-      @Param(
-        name = MANDATORY_ARG,
-        type = Boolean.class,
-        defaultValue = "False",
-        named = true,
-        positional = false,
-        doc = MANDATORY_DOC
-      ),
-      @Param(
-        name = NON_EMPTY_ARG,
-        type = Boolean.class,
-        defaultValue = "False",
-        named = true,
-        positional = false,
-        doc = NON_EMPTY_DOC
-      ),
-      @Param(
-        name = ALLOW_EMPTY_ARG,
-        type = Boolean.class,
-        defaultValue = "True",
-        doc = ALLOW_EMPTY_DOC,
-        named = true
-      )
-    },
-    useAst = true,
-    useEnvironment = true
-  )
+  @Override
   public Descriptor outputListAttribute(
+      Boolean allowEmpty,
       SkylarkList defaultList,
       String doc,
       Boolean mandatory,
       Boolean nonEmpty,
-      Boolean allowEmpty,
       FuncallExpression ast,
       Environment env)
       throws EvalException {
@@ -1465,64 +692,13 @@ public final class SkylarkAttr implements SkylarkValue {
         env);
   }
 
-  @SkylarkCallable(
-    name = "string_dict",
-    doc =
-        "Creates an attribute of type <a href=\"dict.html\">dict</a>, mapping from "
-            + "<a href=\"string.html\">string</a> to <a href=\"string.html\">string</a>.",
-    parameters = {
-      @Param(
-        name = DEFAULT_ARG,
-        allowedTypes = {
-          @ParamType(type = SkylarkDict.class),
-          @ParamType(type = UserDefinedFunction.class)
-        },
-        named = true,
-        positional = false,
-        defaultValue = "{}",
-        doc = DEFAULT_DOC
-      ),
-      @Param(
-        name = DOC_ARG,
-        type = String.class,
-        defaultValue = "''",
-        doc = DOC_DOC,
-        named = true,
-        positional = false
-      ),
-      @Param(
-        name = MANDATORY_ARG,
-        type = Boolean.class,
-        named = true,
-        positional = false,
-        defaultValue = "False",
-        doc = MANDATORY_DOC
-      ),
-      @Param(
-        name = NON_EMPTY_ARG,
-        type = Boolean.class,
-        defaultValue = "False",
-        named = true,
-        positional = false,
-        doc = NON_EMPTY_DOC
-      ),
-      @Param(
-        name = ALLOW_EMPTY_ARG,
-        type = Boolean.class,
-        defaultValue = "True",
-        doc = ALLOW_EMPTY_DOC,
-        named = true
-      )
-    },
-    useAst = true,
-    useEnvironment = true
-  )
+  @Override
   public Descriptor stringDictAttribute(
+      Boolean allowEmpty,
       SkylarkDict<?, ?> defaultO,
       String doc,
       Boolean mandatory,
       Boolean nonEmpty,
-      Boolean allowEmpty,
       FuncallExpression ast,
       Environment env)
       throws EvalException {
@@ -1544,65 +720,13 @@ public final class SkylarkAttr implements SkylarkValue {
         env);
   }
 
-  @SkylarkCallable(
-    name = "string_list_dict",
-    doc =
-        "Creates an attribute of type <a href=\"dict.html\">dict</a>, mapping from "
-            + "<a href=\"string.html\">string</a> to <a href=\"list.html\">list</a> of "
-            + "<a href=\"string.html\">string</a>.",
-    parameters = {
-      @Param(
-        name = DEFAULT_ARG,
-        allowedTypes = {
-          @ParamType(type = SkylarkDict.class),
-          @ParamType(type = UserDefinedFunction.class)
-        },
-        defaultValue = "{}",
-        named = true,
-        positional = false,
-        doc = DEFAULT_DOC
-      ),
-      @Param(
-        name = DOC_ARG,
-        type = String.class,
-        defaultValue = "''",
-        doc = DOC_DOC,
-        named = true,
-        positional = false
-      ),
-      @Param(
-        name = MANDATORY_ARG,
-        type = Boolean.class,
-        defaultValue = "False",
-        named = true,
-        positional = false,
-        doc = MANDATORY_DOC
-      ),
-      @Param(
-        name = NON_EMPTY_ARG,
-        type = Boolean.class,
-        defaultValue = "False",
-        named = true,
-        positional = false,
-        doc = NON_EMPTY_DOC
-      ),
-      @Param(
-        name = ALLOW_EMPTY_ARG,
-        type = Boolean.class,
-        defaultValue = "True",
-        doc = ALLOW_EMPTY_DOC,
-        named = true
-      )
-    },
-    useAst = true,
-    useEnvironment = true
-  )
+  @Override
   public Descriptor stringListDictAttribute(
+      Boolean allowEmpty,
       SkylarkDict<?, ?> defaultO,
       String doc,
       Boolean mandatory,
       Boolean nonEmpty,
-      Boolean allowEmpty,
       FuncallExpression ast,
       Environment env)
       throws EvalException {
@@ -1624,40 +748,7 @@ public final class SkylarkAttr implements SkylarkValue {
         env);
   }
 
-  @SkylarkCallable(
-    name = "license",
-    doc = "Creates an attribute of type license.",
-    // TODO(bazel-team): Implement proper license support for Skylark.
-    parameters = {
-      // TODO(bazel-team): ensure this is the correct default value
-      @Param(
-        name = DEFAULT_ARG,
-        defaultValue = "None",
-        noneable = true,
-        named = true,
-        positional = false,
-        doc = DEFAULT_DOC
-      ),
-      @Param(
-        name = DOC_ARG,
-        type = String.class,
-        defaultValue = "''",
-        doc = DOC_DOC,
-        named = true,
-        positional = false
-      ),
-      @Param(
-        name = MANDATORY_ARG,
-        type = Boolean.class,
-        defaultValue = "False",
-        named = true,
-        positional = false,
-        doc = MANDATORY_DOC
-      )
-    },
-    useAst = true,
-    useEnvironment = true
-  )
+  @Override
   public Descriptor licenseAttribute(
       Object defaultO, String doc, Boolean mandatory, FuncallExpression ast, Environment env)
       throws EvalException {
@@ -1671,17 +762,8 @@ public final class SkylarkAttr implements SkylarkValue {
   }
 
   /** A descriptor of an attribute defined in Skylark. */
-  @SkylarkModule(
-    name = "Attribute",
-    category = SkylarkModuleCategory.NONE,
-    doc =
-        "Representation of a definition of an attribute. Use the <a href=\"attr.html\">attr</a> "
-            + "module to create an Attribute. They are only for use with a "
-            + "<a href=\"globals.html#rule\">rule</a> or an "
-            + "<a href=\"globals.html#aspect\">aspect</a>."
-  )
   @AutoCodec
-  public static final class Descriptor implements SkylarkValue {
+  public static final class Descriptor implements SkylarkAttrApi.Descriptor {
     private final ImmutableAttributeFactory attributeFactory;
     private final String name;
 
@@ -1707,9 +789,5 @@ public final class SkylarkAttr implements SkylarkValue {
     public void repr(SkylarkPrinter printer) {
       printer.append("<attr." + name + ">");
     }
-  }
-
-  static {
-    SkylarkSignatureProcessor.configureSkylarkFunctions(SkylarkAttr.class);
   }
 }

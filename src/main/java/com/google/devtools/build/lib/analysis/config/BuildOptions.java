@@ -15,6 +15,7 @@
 package com.google.devtools.build.lib.analysis.config;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.MoreObjects;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ImmutableList;
@@ -197,6 +198,10 @@ public final class BuildOptions implements Cloneable, Serializable {
       keyBuilder.append(options.cacheKey());
     }
     return keyBuilder.toString();
+  }
+
+  public String computeChecksum() {
+    return Fingerprint.md5Digest(computeCacheKey());
   }
 
   /**
@@ -417,13 +422,13 @@ public final class BuildOptions implements Cloneable, Serializable {
       BuildOptions first, BuildOptions second) {
     OptionsDiff diff = diff(first, second);
     if (diff.areSame()) {
-      return OptionsDiffForReconstruction.getEmpty(first.fingerprint);
+      return OptionsDiffForReconstruction.getEmpty(first.fingerprint, second.computeChecksum());
     }
-    HashMap<Class<? extends FragmentOptions>, Map<String, Object>> differingOptions =
-        new HashMap<>(diff.differingOptions.keySet().size());
+    LinkedHashMap<Class<? extends FragmentOptions>, Map<String, Object>> differingOptions =
+        new LinkedHashMap<>(diff.differingOptions.keySet().size());
     for (Class<? extends FragmentOptions> clazz : diff.differingOptions.keySet()) {
       Collection<OptionDefinition> fields = diff.differingOptions.get(clazz);
-      HashMap<String, Object> valueMap = new HashMap<>(fields.size());
+      LinkedHashMap<String, Object> valueMap = new LinkedHashMap<>(fields.size());
       for (OptionDefinition optionDefinition : fields) {
         Object secondValue;
         try {
@@ -445,7 +450,8 @@ public final class BuildOptions implements Cloneable, Serializable {
         differingOptions,
         ImmutableSet.copyOf(diff.extraFirstFragments),
         ImmutableList.copyOf(diff.extraSecondFragments),
-        first.fingerprint);
+        first.fingerprint,
+        second.computeChecksum());
   }
 
   /**
@@ -543,22 +549,24 @@ public final class BuildOptions implements Cloneable, Serializable {
     private final ImmutableSet<Class<? extends FragmentOptions>> extraFirstFragmentClasses;
     private final ImmutableList<FragmentOptions> extraSecondFragments;
     private final byte[] baseFingerprint;
+    private final String checksum;
 
-    @AutoCodec.VisibleForSerialization
     OptionsDiffForReconstruction(
         Map<Class<? extends FragmentOptions>, Map<String, Object>> differingOptions,
         ImmutableSet<Class<? extends FragmentOptions>> extraFirstFragmentClasses,
         ImmutableList<FragmentOptions> extraSecondFragments,
-        byte[] baseFingerprint) {
+        byte[] baseFingerprint,
+        String checksum) {
       this.differingOptions = differingOptions;
       this.extraFirstFragmentClasses = extraFirstFragmentClasses;
       this.extraSecondFragments = extraSecondFragments;
       this.baseFingerprint = baseFingerprint;
+      this.checksum = checksum;
     }
 
-    private static OptionsDiffForReconstruction getEmpty(byte[] baseFingerprint) {
+    private static OptionsDiffForReconstruction getEmpty(byte[] baseFingerprint, String checksum) {
       return new OptionsDiffForReconstruction(
-          ImmutableMap.of(), ImmutableSet.of(), ImmutableList.of(), baseFingerprint);
+          ImmutableMap.of(), ImmutableSet.of(), ImmutableList.of(), baseFingerprint, checksum);
     }
 
     @Nullable
@@ -583,6 +591,10 @@ public final class BuildOptions implements Cloneable, Serializable {
       return newOptions;
     }
 
+    public String getChecksum() {
+      return checksum;
+    }
+
     private boolean isEmpty() {
       return differingOptions.isEmpty()
           && extraFirstFragmentClasses.isEmpty()
@@ -598,14 +610,21 @@ public final class BuildOptions implements Cloneable, Serializable {
         return false;
       }
       OptionsDiffForReconstruction that = (OptionsDiffForReconstruction) o;
-      return differingOptions.equals(that.differingOptions)
-          && extraFirstFragmentClasses.equals(that.extraFirstFragmentClasses)
-          && this.extraSecondFragments.equals(that.extraSecondFragments);
+      return Arrays.equals(this.baseFingerprint, that.baseFingerprint)
+          && this.checksum.equals(that.checksum);
+    }
+
+    @Override
+    public String toString() {
+      return MoreObjects.toStringHelper(this)
+          .add("differingOptions", differingOptions)
+          .add("extraFirstFragmentClasses", extraFirstFragmentClasses)
+          .add("extraSecondFragments", extraSecondFragments).toString();
     }
 
     @Override
     public int hashCode() {
-      return Objects.hash(differingOptions, extraFirstFragmentClasses, extraSecondFragments);
+      return 31 * Arrays.hashCode(baseFingerprint) + checksum.hashCode();
     }
   }
 }

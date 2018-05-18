@@ -22,16 +22,15 @@ import com.google.common.base.Stopwatch;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.skyframe.serialization.AutoRegistry;
-import com.google.devtools.build.lib.skyframe.serialization.DeserializationContext;
 import com.google.devtools.build.lib.skyframe.serialization.ObjectCodec;
 import com.google.devtools.build.lib.skyframe.serialization.ObjectCodecRegistry;
 import com.google.devtools.build.lib.skyframe.serialization.ObjectCodecs;
 import com.google.devtools.build.lib.skyframe.serialization.SerializationException;
 import com.google.protobuf.ByteString;
-import com.google.protobuf.CodedOutputStream;
 import com.google.protobuf.InvalidProtocolBufferException;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Map;
 import java.util.Random;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -63,6 +62,8 @@ public class SerializationTester {
   private final ImmutableMap.Builder<Class<?>, Object> dependenciesBuilder;
   private final ArrayList<ObjectCodec<?>> additionalCodecs = new ArrayList<>();
   private boolean memoize;
+  private boolean allowFutureBlocking;
+  private ObjectCodecs objectCodecs;
 
   @SuppressWarnings("rawtypes")
   private VerificationFunction verificationFunction =
@@ -85,6 +86,11 @@ public class SerializationTester {
     return this;
   }
 
+  public SerializationTester addDependencies(Map<Class<?>, Object> dependencies) {
+    dependenciesBuilder.putAll(dependencies);
+    return this;
+  }
+
   public SerializationTester addCodec(ObjectCodec<?> codec) {
     additionalCodecs.add(codec);
     return this;
@@ -92,6 +98,17 @@ public class SerializationTester {
 
   public SerializationTester makeMemoizing() {
     this.memoize = true;
+    return this;
+  }
+
+  public SerializationTester makeMemoizingAndAllowFutureBlocking(boolean allowFutureBlocking) {
+    makeMemoizing();
+    this.allowFutureBlocking = allowFutureBlocking;
+    return this;
+  }
+
+  public SerializationTester setObjectCodecs(ObjectCodecs objectCodecs) {
+    this.objectCodecs = objectCodecs;
     return this;
   }
 
@@ -109,41 +126,44 @@ public class SerializationTester {
   }
 
   public void runTests() throws Exception {
-    ObjectCodecRegistry registry = AutoRegistry.get();
-    ImmutableMap<Class<?>, Object> dependencies = dependenciesBuilder.build();
-    ObjectCodecRegistry.Builder registryBuilder = registry.getBuilder();
-    for (Object val : dependencies.values()) {
-      registryBuilder.addConstant(val);
-    }
-    for (ObjectCodec<?> codec : additionalCodecs) {
-      registryBuilder.add(codec);
-    }
-    ObjectCodecs codecs = new ObjectCodecs(registryBuilder.build(), dependencies);
+    ObjectCodecs codecs = this.objectCodecs == null ? createObjectCodecs() : this.objectCodecs;
     testSerializeDeserialize(codecs);
     testStableSerialization(codecs);
     testDeserializeJunkData(codecs);
   }
 
-  private ByteString serialize(Object subject, ObjectCodecs codecs)
-      throws SerializationException, IOException {
-    if (!memoize) {
+  private ObjectCodecs createObjectCodecs() {
+    ObjectCodecRegistry registry = AutoRegistry.get();
+    ImmutableMap<Class<?>, Object> dependencies = dependenciesBuilder.build();
+    ObjectCodecRegistry.Builder registryBuilder = registry.getBuilder();
+    for (Object val : dependencies.values()) {
+      registryBuilder.addReferenceConstant(val);
+    }
+    for (ObjectCodec<?> codec : additionalCodecs) {
+      registryBuilder.add(codec);
+    }
+    return new ObjectCodecs(registryBuilder.build(), dependencies);
+  }
+
+  private ByteString serialize(Object subject, ObjectCodecs codecs) throws SerializationException {
+    if (memoize) {
+      if (allowFutureBlocking) {
+        return codecs.serializeMemoizedAndBlocking(subject).getObject();
+      } else {
+        return codecs.serializeMemoized(subject);
+      }
+    } else {
       return codecs.serialize(subject);
     }
-    ByteString.Output output = ByteString.newOutput();
-    CodedOutputStream codedOut = CodedOutputStream.newInstance(output);
-    codecs.getSerializationContextForTesting().getMemoizingContext().serialize(subject, codedOut);
-    codedOut.flush();
-    return output.toByteString();
   }
 
   private Object deserialize(ByteString serialized, ObjectCodecs codecs)
       throws SerializationException, IOException {
-    if (!memoize) {
+    if (memoize) {
+      return codecs.deserializeMemoized(serialized);
+    } else {
       return codecs.deserialize(serialized);
     }
-    DeserializationContext context =
-        codecs.getDeserializationContextForTesting().getMemoizingContext();
-    return context.deserialize(serialized.newCodedInput());
   }
 
   /** Runs serialization/deserialization tests. */

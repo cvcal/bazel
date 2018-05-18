@@ -25,7 +25,6 @@ import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.events.EventKind;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
-import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec.Memoization;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkValue;
 import com.google.devtools.build.lib.syntax.Mutability.Freezable;
 import com.google.devtools.build.lib.syntax.Mutability.MutabilityException;
@@ -282,19 +281,36 @@ public final class Environment implements Freezable {
       this.bindings = new LinkedHashMap<>();
     }
 
-    public GlobalFrame(Mutability mutability, @Nullable GlobalFrame parent, @Nullable Label label) {
+    public GlobalFrame(
+        Mutability mutability,
+        @Nullable GlobalFrame parent,
+        @Nullable Label label,
+        @Nullable Map<String, Object> bindings) {
       this.mutability = Preconditions.checkNotNull(mutability);
       this.parent = parent;
       this.label = label;
       this.bindings = new LinkedHashMap<>();
+      if (bindings != null) {
+        this.bindings.putAll(bindings);
+      }
     }
 
     public GlobalFrame(Mutability mutability) {
-      this(mutability, null, null);
+      this(mutability, null, null, null);
     }
 
-    public GlobalFrame(Mutability mutability, GlobalFrame parent) {
-      this(mutability, parent, null);
+    public GlobalFrame(Mutability mutability, @Nullable GlobalFrame parent) {
+      this(mutability, parent, null, null);
+    }
+
+    public GlobalFrame(Mutability mutability, @Nullable GlobalFrame parent, @Nullable Label label) {
+      this(mutability, parent, label, null);
+    }
+
+    /** Constructs a global frame for the given builtin bindings. */
+    public static GlobalFrame createForBuiltins(Map<String, Object> bindings) {
+      Mutability mutability = Mutability.create("<builtins>").freeze();
+      return new GlobalFrame(mutability, null, null, bindings);
     }
 
     private void checkInitialized() {
@@ -478,7 +494,7 @@ public final class Environment implements Freezable {
   @Immutable
   // TODO(janakr,brandjon): Do Extensions actually have to start their own memoization? Or can we
   // have a node higher up in the hierarchy inject the mutability?
-  @AutoCodec(memoization = Memoization.START_MEMOIZING)
+  @AutoCodec
   public static final class Extension {
 
     private final ImmutableMap<String, Object> bindings;
@@ -1218,34 +1234,29 @@ public final class Environment implements Freezable {
     return transitiveHashCode;
   }
 
-  /** A read-only {@link Environment.GlobalFrame} with global constants in it only */
+  /** A read-only {@link Environment.GlobalFrame} with False/True/None constants only. */
   static final GlobalFrame CONSTANTS_ONLY = createConstantsGlobals();
 
-  /** A read-only {@link Environment.GlobalFrame} with initial globals */
+  /**
+   * A read-only {@link Environment.GlobalFrame} with initial globals as defined in
+   * MethodLibrary.
+   */
   public static final GlobalFrame DEFAULT_GLOBALS = createDefaultGlobals();
 
   /** To be removed when all call-sites are updated. */
   public static final GlobalFrame SKYLARK = DEFAULT_GLOBALS;
 
   private static Environment.GlobalFrame createConstantsGlobals() {
-    try (Mutability mutability = Mutability.create("CONSTANTS")) {
-      Environment env = Environment.builder(mutability)
-          .useDefaultSemantics()
-          .build();
-      Runtime.setupConstants(env);
-      return env.getGlobals();
-    }
+    ImmutableMap.Builder<String, Object> builder = ImmutableMap.builder();
+    Runtime.addConstantsToBuilder(builder);
+    return GlobalFrame.createForBuiltins(builder.build());
   }
 
   private static Environment.GlobalFrame createDefaultGlobals() {
-    try (Mutability mutability = Mutability.create("BUILD")) {
-      Environment env = Environment.builder(mutability)
-          .useDefaultSemantics()
-          .build();
-      Runtime.setupConstants(env);
-      Runtime.setupMethodEnvironment(env, MethodLibrary.defaultGlobalFunctions);
-      return env.getGlobals();
-    }
+    ImmutableMap.Builder<String, Object> builder = ImmutableMap.builder();
+    Runtime.addConstantsToBuilder(builder);
+    MethodLibrary.addBindingsToBuilder(builder);
+    return GlobalFrame.createForBuiltins(builder.build());
   }
 
   /** An exception thrown by {@link #FAIL_FAST_HANDLER}. */

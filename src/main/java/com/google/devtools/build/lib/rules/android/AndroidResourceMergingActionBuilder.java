@@ -25,11 +25,11 @@ import com.google.devtools.build.lib.analysis.actions.CustomCommandLine;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
-import com.google.devtools.build.lib.rules.android.ResourceContainerConverter.ToArg;
-import com.google.devtools.build.lib.rules.android.ResourceContainerConverter.ToArg.Includes;
+import com.google.devtools.build.lib.rules.android.AndroidDataConverter.JoinerType;
 import com.google.devtools.build.lib.util.OS;
 import java.util.ArrayList;
 import java.util.List;
+import javax.annotation.Nullable;
 
 /**
  * Builder for creating $android_resource_merger action. The action merges resources and generates
@@ -40,34 +40,30 @@ import java.util.List;
  */
 public class AndroidResourceMergingActionBuilder {
 
-  private static final ResourceContainerConverter.ToArg RESOURCE_CONTAINER_TO_ARG =
-      ResourceContainerConverter.builder()
-          .include(Includes.ResourceRoots)
-          .include(Includes.Label)
-          .include(Includes.SymbolsBin)
-          .withSeparator(ToArg.SeparatorType.SEMICOLON_AMPERSAND)
-          .toArgConverter();
+  private static final AndroidDataConverter<MergableAndroidData> RESOURCE_CONTAINER_TO_ARG =
+      AndroidDataConverter.MERGABLE_DATA_CONVERTER;
 
-  private static final ResourceContainerConverter.ToArg RESOURCE_CONTAINER_TO_ARG_FOR_COMPILED =
-      ResourceContainerConverter.builder()
-          .include(Includes.ResourceRoots)
-          .include(Includes.Label)
-          .include(Includes.CompiledSymbols)
-          .withSeparator(ToArg.SeparatorType.SEMICOLON_AMPERSAND)
-          .toArgConverter();
+  private static final AndroidDataConverter<CompiledMergableAndroidData>
+      RESOURCE_CONTAINER_TO_ARG_FOR_COMPILED =
+          AndroidDataConverter.<CompiledMergableAndroidData>builder(JoinerType.SEMICOLON_AMPERSAND)
+              .withRoots(CompiledMergableAndroidData::getResourceRoots)
+              .withRoots(CompiledMergableAndroidData::getAssetRoots)
+              .withLabel(CompiledMergableAndroidData::getLabel)
+              .withArtifact(CompiledMergableAndroidData::getCompiledSymbols)
+              .build();
 
   private final RuleContext ruleContext;
   private final AndroidSdkProvider sdk;
 
   // Inputs
-  private ResourceContainer primary;
+  private CompiledMergableAndroidData primary;
   private ResourceDependencies dependencies;
 
   // Outputs
   private Artifact mergedResourcesOut;
   private Artifact classJarOut;
   private Artifact manifestOut;
-  private Artifact dataBindingInfoZip;
+  private @Nullable Artifact dataBindingInfoZip;
 
   // Flags
   private String customJavaPackage;
@@ -84,7 +80,7 @@ public class AndroidResourceMergingActionBuilder {
    * The primary resource for merging. This resource will overwrite any resource or data value in
    * the transitive closure.
    */
-  public AndroidResourceMergingActionBuilder withPrimary(ResourceContainer primary) {
+  private AndroidResourceMergingActionBuilder withPrimary(CompiledMergableAndroidData primary) {
     this.primary = primary;
     return this;
   }
@@ -113,7 +109,7 @@ public class AndroidResourceMergingActionBuilder {
    * The output zip for resource-processed data binding expressions (i.e. a zip of .xml files).
    *
    * <p>If null, data binding processing is skipped (and data binding expressions aren't allowed in
-   *  layout resources).
+   * layout resources).
    */
   public AndroidResourceMergingActionBuilder setDataBindingInfoZip(Artifact zip) {
     this.dataBindingInfoZip = zip;
@@ -172,8 +168,10 @@ public class AndroidResourceMergingActionBuilder {
     inputs.add(primary.getCompiledSymbols());
 
     if (dependencies != null) {
-      ResourceContainerConverter.addToCommandLine(
-          dependencies, builder, RESOURCE_CONTAINER_TO_ARG_FOR_COMPILED);
+      RESOURCE_CONTAINER_TO_ARG_FOR_COMPILED.addDepsToCommandLine(
+          builder,
+          dependencies.getDirectResourceContainers(),
+          dependencies.getTransitiveResourceContainers());
       inputs.addTransitive(dependencies.getTransitiveResources());
       inputs.addTransitive(dependencies.getTransitiveAssets());
       inputs.addTransitive(dependencies.getTransitiveCompiledSymbols());
@@ -208,7 +206,10 @@ public class AndroidResourceMergingActionBuilder {
     inputs.add(primary.getSymbols());
 
     if (dependencies != null) {
-      ResourceContainerConverter.addToCommandLine(dependencies, builder, RESOURCE_CONTAINER_TO_ARG);
+      RESOURCE_CONTAINER_TO_ARG.addDepsToCommandLine(
+          builder,
+          dependencies.getDirectResourceContainers(),
+          dependencies.getTransitiveResourceContainers());
       inputs.addTransitive(dependencies.getTransitiveResources());
       inputs.addTransitive(dependencies.getTransitiveAssets());
       inputs.addTransitive(dependencies.getTransitiveSymbolsBin());
@@ -240,7 +241,7 @@ public class AndroidResourceMergingActionBuilder {
             .build(context));
   }
 
-  public ResourceContainer build(RuleContext context) {
+  private void build(RuleContext context) {
     CustomCommandLine.Builder parsedMergeBuilder =
         new CustomCommandLine.Builder().add("--tool").add("MERGE").add("--");
     CustomCommandLine.Builder compiledMergeBuilder =
@@ -285,9 +286,13 @@ public class AndroidResourceMergingActionBuilder {
     if (!parsedMergeOutputs.isEmpty()) {
       buildParsedResourceMergingAction(parsedMergeBuilder, parsedMergeOutputs, context);
     }
+  }
+
+  public ResourceContainer build(RuleContext ruleContext, ResourceContainer resourceContainer) {
+    withPrimary(resourceContainer).build(ruleContext);
 
     // Return the full set of processed transitive dependencies.
-    ResourceContainer.Builder result = primary.toBuilder();
+    ResourceContainer.Builder result = resourceContainer.toBuilder();
     if (classJarOut != null) {
       // ensure the classJar is propagated if it exists. Otherwise, AndroidCommon tries to make it.
       // TODO(corysmith): Centralize the class jar generation.
@@ -296,6 +301,21 @@ public class AndroidResourceMergingActionBuilder {
     if (manifestOut != null) {
       result.setManifest(manifestOut);
     }
+    if (mergedResourcesOut != null) {
+      result.setMergedResources(mergedResourcesOut);
+    }
     return result.build();
+  }
+
+  public MergedAndroidResources build(RuleContext ruleContext, ParsedAndroidResources parsed) {
+    withPrimary(parsed).build(ruleContext);
+
+    return MergedAndroidResources.of(
+        parsed,
+        mergedResourcesOut,
+        classJarOut,
+        dataBindingInfoZip,
+        dependencies,
+        parsed.getStampedManifest().withProcessedManifest(manifestOut));
   }
 }

@@ -67,6 +67,17 @@ function test_shutdown() {
   bazel shutdown >& $TEST_log || fail "Expected success"
   local server_pid2=$(bazel info server_pid 2>$TEST_log)
   assert_not_equals "$server_pid1" "$server_pid2"
+  expect_not_log "WARNING: Running B\\(azel\\|laze\\) server needs to be killed"
+}
+
+function test_server_restart_due_to_startup_options_with_client_debug_information() {
+  # Using --write_command_log for no particular reason, if that flag is removed, another startup
+  # option will do just fine.
+  local server_pid1=$(bazel --client_debug --write_command_log info server_pid 2>$TEST_log)
+  local server_pid2=$(bazel --client_debug --nowrite_command_log info server_pid 2>$TEST_log)
+  assert_not_equals "$server_pid1" "$server_pid2" # pid changed.
+  expect_log "\\[bazel WARNING .*\\] Running B\\(azel\\|laze\\) server needs to be killed"
+  expect_log "\\[bazel INFO .*\\] .* the running server has option --write_command_log, and requested option is: --nowrite_command_log"
 }
 
 function test_exit_code() {
@@ -82,17 +93,17 @@ function test_output_base() {
 
 function test_output_base_is_file() {
   bazel --output_base=/dev/null &>$TEST_log && fail "Expected non-zero exit"
-  expect_log "Error: Output base directory '/dev/null' could not be created.*exists"
+  expect_log "FATAL: Output base directory '/dev/null' could not be created.*exists"
 }
 
 function test_cannot_create_output_base() {
   bazel --output_base=/foo &>$TEST_log && fail "Expected non-zero exit"
-  expect_log "Error: Output base directory '/foo' could not be created"
+  expect_log "FATAL: Output base directory '/foo' could not be created"
 }
 
 function test_nonwritable_output_base() {
   bazel --output_base=/ &>$TEST_log && fail "Expected non-zero exit"
-  expect_log "Output base directory '/' must be readable and writable."
+  expect_log "FATAL: Output base directory '/' must be readable and writable."
 }
 
 function test_no_arguments() {
@@ -113,7 +124,7 @@ function test_dashdash_before_command() {
   bazel -- info &>$TEST_log && "Expected failure"
   exitcode=$?
   assert_equals 2 $exitcode
-  expect_log "Unknown startup option: '--'."
+  expect_log "\\[bazel FATAL .*\\] Unknown startup option: '--'."
 }
 
 function test_dashdash_after_command() {

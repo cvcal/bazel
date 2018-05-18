@@ -172,13 +172,19 @@ public class DepsCheckerClassVisitor extends ClassVisitor {
     AbstractClassEntryState state = classCache.getClassState(internalName);
     if (state.isMissingState()) {
       resultCollector.addMissingOrIncompleteClass(internalName, state);
-    } else if (state.isIncompleteState()) {
-      String missingAncestor = state.asIncompleteState().getMissingAncestor();
-      AbstractClassEntryState ancestorState = classCache.getClassState(missingAncestor);
-      checkState(
-          ancestorState.isMissingState(), "The ancestor should be missing. %s", ancestorState);
-      resultCollector.addMissingOrIncompleteClass(missingAncestor, ancestorState);
-      resultCollector.addMissingOrIncompleteClass(internalName, state);
+    } else {
+      if (state.isIncompleteState()) {
+        String missingAncestor = state.asIncompleteState().getMissingAncestor();
+        AbstractClassEntryState ancestorState = classCache.getClassState(missingAncestor);
+        checkState(
+            ancestorState.isMissingState(), "The ancestor should be missing. %s", ancestorState);
+        resultCollector.addMissingOrIncompleteClass(missingAncestor, ancestorState);
+        resultCollector.addMissingOrIncompleteClass(internalName, state);
+      }
+      ClassInfo info = state.classInfo().get();
+      if (!info.directDep()) {
+        resultCollector.addIndirectDep(info.jarPath());
+      }
     }
     return state;
   }
@@ -223,11 +229,15 @@ public class DepsCheckerClassVisitor extends ClassVisitor {
         checkType(((Type) value)); // Class literals.
         return;
       }
-      if (PRIMITIVE_TYPES.contains(value.getClass())) {
-        checkType(Type.getType(value.getClass()));
+      Class<?> clazz = value.getClass();
+      if (PRIMITIVE_TYPES.contains(clazz)) {
         return;
       }
-      throw new UnsupportedOperationException("Unhandled value " + value);
+      checkState(
+          clazz.isArray() && clazz.getComponentType().isPrimitive(),
+          "Unexpected value %s of type %s",
+          value,
+          clazz);
     }
 
     @Override
@@ -284,6 +294,9 @@ public class DepsCheckerClassVisitor extends ClassVisitor {
 
     @Override
     public AnnotationVisitor visitParameterAnnotation(int parameter, String desc, boolean visible) {
+      if ("Ljava/lang/Synthetic;".equals(desc)) {
+        return null; // ASM sometimes makes up this annotation, so we can ignore it (b/78024300)
+      }
       checkDescriptor(desc);
       return defaultAnnotationChecker;
     }

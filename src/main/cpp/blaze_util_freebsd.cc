@@ -38,8 +38,7 @@
 
 namespace blaze {
 
-using blaze_util::die;
-using blaze_util::pdie;
+using blaze_util::GetLastErrorString;
 using std::string;
 
 string GetOutputRoot() {
@@ -79,12 +78,14 @@ string GetSelfPath() {
   auto p = procstat_getprocs(procstat, KERN_PROC_PID, pid, &n);
   if (p) {
     if (n != 1) {
-      pdie(blaze_exit_code::INTERNAL_ERROR,
-           "expected exactly one process from procstat_getprocs, got %d", n);
+      BAZEL_DIE(blaze_exit_code::INTERNAL_ERROR)
+          << "expected exactly one process from procstat_getprocs, got " << n
+          << ": " << GetLastErrorString();
     }
     auto r = procstat_getpathname(procstat, p, buffer, PATH_MAX);
     if (r != 0) {
-      pdie(blaze_exit_code::INTERNAL_ERROR, "error procstat_getpathname");
+      BAZEL_DIE(blaze_exit_code::INTERNAL_ERROR)
+          << "procstat_getpathname failed: " << GetLastErrorString();
     }
     procstat_freeprocs(procstat, p);
   }
@@ -116,8 +117,9 @@ string GetProcessCWD(int pid) {
   string cwd;
   if (p) {
     if (n != 1) {
-      pdie(blaze_exit_code::INTERNAL_ERROR,
-           "expected exactly one process from procstat_getprocs, got %d", n);
+      BAZEL_DIE(blaze_exit_code::INTERNAL_ERROR)
+          << "expected exactly one process from procstat_getprocs, got " << n
+          << ": " << GetLastErrorString();
     }
     auto files = procstat_getfiles(procstat, p, false);
     filestat *entry;
@@ -141,7 +143,7 @@ bool IsSharedLibrary(const string &filename) {
   return blaze_util::ends_with(filename, ".so");
 }
 
-string GetDefaultHostJavabase() {
+string GetSystemJavabase() {
   // if JAVA_HOME is defined, then use it as default.
   string javahome = GetEnv("JAVA_HOME");
   return !javahome.empty() ? javahome : "/usr/local/openjdk8";

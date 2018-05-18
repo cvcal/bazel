@@ -13,7 +13,6 @@
 // limitations under the License.
 package com.google.devtools.build.lib.query2;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -42,7 +41,7 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
-import com.google.devtools.build.lib.events.NullEventHandler;
+import com.google.devtools.build.lib.events.Reporter;
 import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.ConfiguredAttributeMapper;
@@ -51,72 +50,71 @@ import com.google.devtools.build.lib.packages.RuleTransitionFactory;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.packages.TargetUtils;
 import com.google.devtools.build.lib.query2.engine.QueryEnvironment.TargetAccessor;
-import com.google.devtools.build.lib.query2.engine.ThreadSafeOutputFormatterCallback;
 import com.google.devtools.build.lib.query2.output.CqueryOptions;
 import com.google.devtools.build.lib.skyframe.SkyframeExecutor;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.util.OrderedSetMultimap;
 import java.io.IOException;
 import java.io.OutputStream;
-import java.io.PrintStream;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+import javax.annotation.Nullable;
 
 /**
  * Output formatter that prints {@link ConfigurationTransition} information for rule configured
  * targets in the results of a cquery call.
  */
-public class TransitionsOutputFormatterCallback
-    extends ThreadSafeOutputFormatterCallback<ConfiguredTarget> {
+public class TransitionsOutputFormatterCallback extends CqueryThreadsafeCallback {
 
-  private final ConfiguredTargetAccessor accessor;
-  private final SkyframeExecutor skyframeExecutor;
-  private final BuildConfiguration hostConfiguration;
-  private final CqueryOptions.Transitions transitions;
+  protected final BuildConfiguration hostConfiguration;
+
   private final HashMap<Label, Target> partialResultMap;
+  @Nullable private final RuleTransitionFactory trimmingTransitionFactory;
 
-  private PrintStream printStream = null;
-  private final List<String> result = new ArrayList<>();
+  @Override
+  public String getName() {
+    return "transitions";
+  }
 
   /**
    * @param accessor provider of query result configured targets.
-   * @param transitions a value of {@link CqueryOptions.Transitions} enum that signals how verbose
-   *     the transition information should be.
-   * @param out output stream. This is nullable for testing purposes since tests directly access
-   *     result.
+   * @param hostConfiguration host configuration for this query.
    */
-  public TransitionsOutputFormatterCallback(
-      TargetAccessor<ConfiguredTarget> accessor,
-      CqueryOptions.Transitions transitions,
+  TransitionsOutputFormatterCallback(
+      Reporter reporter,
+      CqueryOptions options,
       OutputStream out,
       SkyframeExecutor skyframeExecutor,
-      BuildConfiguration hostConfiguration) {
-    this.accessor = (ConfiguredTargetAccessor) accessor;
-    this.skyframeExecutor = skyframeExecutor;
+      TargetAccessor<ConfiguredTarget> accessor,
+      BuildConfiguration hostConfiguration,
+      @Nullable RuleTransitionFactory trimmingTransitionFactory) {
+    super(reporter, options, out, skyframeExecutor, accessor);
     this.hostConfiguration = hostConfiguration;
-    Preconditions.checkArgument(
-        !transitions.equals(CqueryOptions.Transitions.NONE),
-        "This formatter callback should never be constructed if "
-            + "CqueryOptions.Transitions == NONE.");
-    this.transitions = transitions;
-    if (out != null) {
-      this.printStream = new PrintStream(out);
-    }
+    this.trimmingTransitionFactory = trimmingTransitionFactory;
     this.partialResultMap = Maps.newHashMap();
   }
 
   @Override
   public void processOutput(Iterable<ConfiguredTarget> partialResult)
       throws IOException, InterruptedException {
+    CqueryOptions.Transitions verbosity = options.transitions;
+    if (verbosity.equals(CqueryOptions.Transitions.NONE)) {
+      reporter.handle(
+          Event.error(
+              "Instead of using --output=transitions, set the --transition flag"
+                  + " explicitly to 'lite' or 'full'"));
+      return;
+    }
     partialResult.forEach(
         ct -> partialResultMap.put(ct.getLabel(), accessor.getTargetFromConfiguredTarget(ct)));
     for (ConfiguredTarget configuredTarget : partialResult) {
       Target target = partialResultMap.get(configuredTarget.getLabel());
-      BuildConfiguration config = configuredTarget.getConfiguration();
+      BuildConfiguration config =
+          skyframeExecutor.getConfiguration(
+              reporter, configuredTarget.getConfigurationKey());
       addResult(
           getRuleClassTransition(configuredTarget, target)
               + configuredTarget.getLabel()
@@ -136,7 +134,7 @@ public class TransitionsOutputFormatterCallback
         // Also, we don't actually use fromOptions in our implementation of DependencyResolver but
         // passing to avoid passing a null and since we have the information anyway.
         deps =
-            new FormatterDependencyResolver(configuredTarget, NullEventHandler.INSTANCE)
+            new FormatterDependencyResolver(configuredTarget, reporter)
                 .dependentNodeMap(
                     new TargetAndConfiguration(target, config),
                     hostConfiguration,
@@ -145,7 +143,8 @@ public class TransitionsOutputFormatterCallback
                     ImmutableSet.copyOf(
                         ConfiguredAttributeMapper.of(target.getAssociatedRule(), configConditions)
                             .get(PlatformSemantics.TOOLCHAINS_ATTR, BuildType.LABEL_LIST)),
-                    fromOptions);
+                    fromOptions,
+                    trimmingTransitionFactory);
       } catch (EvalException | InvalidConfigurationException | InconsistentAspectOrderException e) {
         throw new InterruptedException(e.getMessage());
       }
@@ -178,13 +177,14 @@ public class TransitionsOutputFormatterCallback
                 .concat(
                     toOptions
                         .stream()
-                        .map(options -> {
-                          String checksum = BuildConfiguration.computeChecksum(options);
-                          return checksum.equals(hostConfigurationChecksum) ? "HOST" : checksum;
-                        })
+                        .map(
+                            options -> {
+                              String checksum = options.computeChecksum();
+                              return checksum.equals(hostConfigurationChecksum) ? "HOST" : checksum;
+                            })
                         .collect(Collectors.joining(", ")))
                 .concat(")"));
-        if (transitions == CqueryOptions.Transitions.LITE) {
+        if (verbosity == CqueryOptions.Transitions.LITE) {
           continue;
         }
         OptionsDiff diff = new OptionsDiff();
@@ -211,22 +211,6 @@ public class TransitionsOutputFormatterCallback
       }
     }
     return output;
-  }
-
-  private void addResult(String string) {
-    result.add(string);
-  }
-
-  @VisibleForTesting
-  public List<String> getResult() {
-    return result;
-  }
-
-  @Override
-  public void close(boolean failFast) throws InterruptedException, IOException {
-    if (!failFast && printStream != null) {
-      result.forEach(printStream::println);
-    }
   }
 
   private class FormatterDependencyResolver extends DependencyResolver {
@@ -280,7 +264,7 @@ public class TransitionsOutputFormatterCallback
         Iterable<BuildOptions> buildOptions,
         BuildOptions defaultOptions) {
       Preconditions.checkArgument(
-          ct.getConfiguration().fragmentClasses().equals(fragments),
+          ct.getConfigurationKey().getFragments().equals(fragments.fragmentClasses()),
           "Mismatch: %s %s",
           ct,
           fragments);
@@ -299,3 +283,4 @@ public class TransitionsOutputFormatterCallback
     }
   }
 }
+

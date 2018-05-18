@@ -38,12 +38,6 @@ def _http_archive_impl(ctx):
   if ctx.attr.build_file and ctx.attr.build_file_content:
     ctx.fail("Only one of build_file and build_file_content can be provided.")
 
-  # These print statement is not only for debug, but it also ensures the file
-  # is referenced before the download is started; this is necessary till a
-  # proper fix for https://github.com/bazelbuild/bazel/issues/2700 is
-  # implemented. A proper could, e.g., be to ensure that all ctx.path of
-  # all the lables provided as arguments are present before the implementation
-  # function is called the first time.
   if ctx.attr.build_file:
     print("ctx.attr.build_file %s, path %s" %
           (str(ctx.attr.build_file), ctx.path(ctx.attr.build_file)))
@@ -89,6 +83,8 @@ _http_archive_attrs = {
     "patches": attr.label_list(default=[]),
     "patch_tool": attr.string(default="patch"),
     "patch_cmds": attr.string_list(default=[]),
+    "workspace_file": attr.label(),
+    "workspace_file_content": attr.string(),
 }
 
 
@@ -154,6 +150,14 @@ Args:
   build_file_content: The content for the BUILD file for this repository.
 
     Either `build_file` or `build_file_content` can be specified.
+  workspace_file: The file to use as the `WORKSPACE` file for this repository.
+
+    Either `workspace_file` or `workspace_file_content` can be specified, or
+    neither, but not both.
+  workspace_file_content: The content for the WORKSPACE file for this repository.
+
+    Either `workspace_file` or `workspace_file_content` can be specified, or
+    neither, but not both.
   sha256: The expected SHA-256 of the file downloaded.
 
     This must match the SHA-256 of the file downloaded. _It is a security risk

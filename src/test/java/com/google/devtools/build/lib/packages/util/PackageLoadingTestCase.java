@@ -95,12 +95,13 @@ public abstract class PackageLoadingTestCase extends FoundationTestCase {
         new BlazeDirectories(
             new ServerDirectories(outputBase, outputBase, outputBase),
             rootDirectory,
+            /* defaultSystemJavabase= */ null,
             loadingMock.getProductName());
     packageFactory =
         loadingMock
             .getPackageFactoryBuilderForTesting(directories)
             .setEnvironmentExtensions(getEnvironmentExtensions())
-            .build(ruleClassProvider, scratch.getFileSystem());
+            .build(ruleClassProvider);
     skyframeExecutor = createSkyframeExecutor();
     setUpSkyframe();
   }
@@ -117,7 +118,7 @@ public abstract class PackageLoadingTestCase extends FoundationTestCase {
             fileSystem,
             directories,
             actionKeyContext,
-            null, /* workspaceStatusActionFactory */
+            /* workspaceStatusActionFactory= */ null,
             ruleClassProvider.getBuildInfoFactories(),
             ImmutableList.<DiffAwareness.Factory>of(),
             ImmutableMap.<SkyFunctionName, SkyFunction>of(),

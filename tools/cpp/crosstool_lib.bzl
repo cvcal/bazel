@@ -158,6 +158,12 @@ def get_features_to_appear_first(platform):
           ["-pie"],
           expand_if_all_available=["force_pic"]),
       simple_feature(
+          "user_link_flags",
+          LINK_ACTIONS,
+          ["%{user_link_flags}"],
+          iterate_over="user_link_flags",
+          expand_if_all_available=["user_link_flags"]),
+      simple_feature(
           "legacy_link_flags",
           LINK_ACTIONS,
           ["%{legacy_link_flags}"],
@@ -223,17 +229,17 @@ def get_features_to_appear_last(platform):
       feature(
           "compiler_output_flags", [
               flag_set(COMPILE_ACTIONS,[
-                flag_group(
-                    flags("-o", "%{output_object_file}"),
-                    expand_if_all_available=["output_object_file"],
-                  ),
                   flag_group(
-                    flags("-S", "-o", "%{output_assembly_file}"),
+                    flags("-S"),
                     expand_if_all_available=["output_assembly_file"],
                   ),
                   flag_group(
-                    flags("-E", "-o", "%{output_preprocess_file}"),
+                    flags("-E"),
                     expand_if_all_available=["output_preprocess_file"],
+                  ),
+                  flag_group(
+                    flags("-o", "%{output_file}"),
+                    expand_if_all_available=["output_file"],
                   ),
               ])
           ]
@@ -259,7 +265,7 @@ def _coverage_feature(use_llvm_format):
     link_flags = flags("-fprofile-instr-generate")
   else:
     compile_flags = flags("-fprofile-arcs", "-ftest-coverage")
-    link_flags = flags("-lgcov")
+    link_flags = flags("--coverage")
   return feature(
     "coverage",
     [

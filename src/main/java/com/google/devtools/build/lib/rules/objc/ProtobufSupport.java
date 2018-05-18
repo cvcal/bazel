@@ -205,34 +205,34 @@ final class ProtobufSupport {
    */
   public ProtobufSupport registerCompilationActions()
       throws RuleErrorException, InterruptedException {
-    int actionId = 0;
     Iterable<PathFragment> userHeaderSearchPaths =
         ImmutableList.of(getWorkspaceRelativeOutputDir());
+
+    CompilationArtifacts.Builder compilationArtifacts =
+        new CompilationArtifacts.Builder()
+            .setIntermediateArtifacts(getUniqueIntermediateArtifactsForSourceCompile());
+
     for (ImmutableSet<Artifact> inputProtos : orderedInputOutputKeySet()) {
       ImmutableSet<Artifact> outputProtos = inputsToOutputsMap.get(inputProtos);
-
-      IntermediateArtifacts intermediateArtifacts = getUniqueIntermediateArtifacts(actionId);
-
-      CompilationArtifacts compilationArtifacts =
-          getCompilationArtifacts(intermediateArtifacts, inputProtos, outputProtos);
-
-      ObjcCommon common = getCommon(intermediateArtifacts, compilationArtifacts);
-
-      CompilationSupport compilationSupport =
-          new CompilationSupport.Builder()
-              .setRuleContext(ruleContext)
-              .setConfig(buildConfiguration)
-              .setIntermediateArtifacts(intermediateArtifacts)
-              .setCompilationAttributes(new CompilationAttributes.Builder().build())
-              .setToolchainProvider(toolchain)
-              .doNotUseDeps()
-              .doNotUsePch()
-              .build();
-
-      compilationSupport.registerCompileAndArchiveActions(common, userHeaderSearchPaths);
-
-      actionId++;
+      addCompilationArtifacts(compilationArtifacts, inputProtos, outputProtos);
     }
+
+    ObjcCommon common =
+        getCommon(getUniqueIntermediateArtifactsForSourceCompile(), compilationArtifacts.build());
+
+    CompilationSupport compilationSupport =
+        new CompilationSupport.Builder()
+            .setRuleContext(ruleContext)
+            .setConfig(buildConfiguration)
+            .setIntermediateArtifacts(getUniqueIntermediateArtifactsForSourceCompile())
+            .setCompilationAttributes(new CompilationAttributes.Builder().build())
+            .setToolchainProvider(toolchain)
+            .doNotUseDeps()
+            .doNotUsePch()
+            .build();
+
+    compilationSupport.registerCompileAndArchiveActions(common, userHeaderSearchPaths);
+
     return this;
   }
 
@@ -253,7 +253,7 @@ final class ProtobufSupport {
    * Returns the ObjcProvider for this target, or Optional.absent() if there were no protos to
    * generate.
    */
-  public Optional<ObjcProvider> getObjcProvider() {
+  public Optional<ObjcProvider> getObjcProvider() throws InterruptedException {
     if (inputsToOutputsMap.isEmpty()) {
       return Optional.absent();
     }
@@ -265,18 +265,18 @@ final class ProtobufSupport {
       commonBuilder.setIntermediateArtifacts(intermediateArtifacts).setHasModuleMap();
     }
 
-    int actionId = 0;
+    CompilationArtifacts.Builder compilationArtifacts =
+        new CompilationArtifacts.Builder()
+            .setIntermediateArtifacts(getUniqueIntermediateArtifactsForSourceCompile());
+
     for (ImmutableSet<Artifact> inputProtos : orderedInputOutputKeySet()) {
       ImmutableSet<Artifact> outputProtos = inputsToOutputsMap.get(inputProtos);
-      IntermediateArtifacts intermediateArtifacts = getUniqueIntermediateArtifacts(actionId);
-
-      CompilationArtifacts compilationArtifacts =
-          getCompilationArtifacts(intermediateArtifacts, inputProtos, outputProtos);
-
-      ObjcCommon common = getCommon(intermediateArtifacts, compilationArtifacts);
-      commonBuilder.addDepObjcProviders(ImmutableSet.of(common.getObjcProvider()));
-      actionId++;
+      addCompilationArtifacts(compilationArtifacts, inputProtos, outputProtos);
     }
+
+    ObjcCommon common =
+        getCommon(getUniqueIntermediateArtifactsForSourceCompile(), compilationArtifacts.build());
+    commonBuilder.addDepObjcProviders(ImmutableSet.of(common.getObjcProvider()));
 
     if (isLinkingTarget()) {
       commonBuilder.addIncludes(includes);
@@ -381,24 +381,22 @@ final class ProtobufSupport {
     return "_" + BUNDLED_PROTOS_IDENTIFIER;
   }
 
-  private String getUniqueBundledProtosPrefix(int actionId) {
-    return BUNDLED_PROTOS_IDENTIFIER + "_" + actionId;
+  private String getBundledProtosPrefix() {
+    return BUNDLED_PROTOS_IDENTIFIER + "_";
   }
 
   private String getUniqueBundledProtosSuffix(int actionId) {
     return getBundledProtosSuffix() + "_" + actionId;
   }
 
-  private IntermediateArtifacts getUniqueIntermediateArtifacts(int actionId) {
+  private IntermediateArtifacts getUniqueIntermediateArtifactsForSourceCompile() {
     return new IntermediateArtifacts(
-        ruleContext,
-        getUniqueBundledProtosSuffix(actionId),
-        getUniqueBundledProtosPrefix(actionId),
-        buildConfiguration);
+        ruleContext, getBundledProtosSuffix(), getBundledProtosPrefix(), buildConfiguration);
   }
 
   private ObjcCommon getCommon(
-      IntermediateArtifacts intermediateArtifacts, CompilationArtifacts compilationArtifacts) {
+      IntermediateArtifacts intermediateArtifacts, CompilationArtifacts compilationArtifacts)
+      throws InterruptedException {
     ObjcCommon.Builder commonBuilder =
         new ObjcCommon.Builder(ruleContext)
             .setIntermediateArtifacts(intermediateArtifacts)
@@ -413,25 +411,22 @@ final class ProtobufSupport {
     return commonBuilder.build();
   }
 
-  private CompilationArtifacts getCompilationArtifacts(
-      IntermediateArtifacts intermediateArtifacts,
+  private void addCompilationArtifacts(
+      CompilationArtifacts.Builder compilationArtifactsBuilder,
       Iterable<Artifact> inputProtoFiles,
       Iterable<Artifact> outputProtoFiles) {
     // Filter the well known protos from the set of headers. We don't generate the headers for them
     // as they are part of the runtime library.
     Iterable<Artifact> filteredInputProtos = attributes.filterWellKnownProtos(inputProtoFiles);
 
-    CompilationArtifacts.Builder compilationArtifacts =
-        new CompilationArtifacts.Builder()
-            .setIntermediateArtifacts(intermediateArtifacts)
-            .addAdditionalHdrs(getGeneratedProtoOutputs(filteredInputProtos, HEADER_SUFFIX))
-            .addAdditionalHdrs(getProtobufHeaders());
+    compilationArtifactsBuilder
+        .addAdditionalHdrs(getGeneratedProtoOutputs(filteredInputProtos, HEADER_SUFFIX))
+        .addAdditionalHdrs(getProtobufHeaders());
 
     if (isLinkingTarget()) {
-      compilationArtifacts.addNonArcSrcs(getProtoSourceFilesForCompilation(outputProtoFiles));
+      compilationArtifactsBuilder.addNonArcSrcs(
+          getProtoSourceFilesForCompilation(outputProtoFiles));
     }
-
-    return compilationArtifacts.build();
   }
 
   private Iterable<Artifact> getProtoSourceFilesForCompilation(

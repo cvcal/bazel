@@ -720,12 +720,13 @@ public class LoadingPhaseRunnerTest {
               new ServerDirectories(
                   fs.getPath("/install"), fs.getPath("/output"), fs.getPath("/userRoot")),
               workspace,
+              /* defaultSystemJavabase= */ null,
               analysisMock.getProductName());
       FileSystemUtils.deleteTree(workspace.getRelative("base"));
 
       ConfiguredRuleClassProvider ruleClassProvider = analysisMock.createRuleClassProvider();
       PackageFactory pkgFactory =
-          analysisMock.getPackageFactoryBuilderForTesting(directories).build(ruleClassProvider, fs);
+          analysisMock.getPackageFactoryBuilderForTesting(directories).build(ruleClassProvider);
       PackageCacheOptions options = Options.getDefaults(PackageCacheOptions.class);
       storedErrors = new StoredEventHandler();
       BuildOptions defaultBuildOptions;

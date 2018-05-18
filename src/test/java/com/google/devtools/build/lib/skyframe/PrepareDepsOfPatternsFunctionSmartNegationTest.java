@@ -74,13 +74,14 @@ public class PrepareDepsOfPatternsFunctionSmartNegationTest extends FoundationTe
                 getScratch().dir("/output"),
                 getScratch().dir("/user_root")),
             rootDirectory,
+            /* defaultSystemJavabase= */ null,
             AnalysisMock.get().getProductName());
     ConfiguredRuleClassProvider ruleClassProvider = AnalysisMock.get().createRuleClassProvider();
     skyframeExecutor =
         SequencedSkyframeExecutor.create(
             AnalysisMock.get()
                 .getPackageFactoryBuilderForTesting(directories)
-                .build(ruleClassProvider, fileSystem),
+                .build(ruleClassProvider),
             fileSystem,
             directories,
             new ActionKeyContext(),

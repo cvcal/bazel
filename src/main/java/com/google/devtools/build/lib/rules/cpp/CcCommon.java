@@ -46,7 +46,6 @@ import com.google.devtools.build.lib.rules.apple.ApplePlatform;
 import com.google.devtools.build.lib.rules.cpp.CcCompilationHelper.SourceCategory;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainFeatures.CollidingProvidesException;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainFeatures.FeatureConfiguration;
-import com.google.devtools.build.lib.rules.cpp.CcToolchainFeatures.Variables;
 import com.google.devtools.build.lib.rules.cpp.CppConfiguration.DynamicMode;
 import com.google.devtools.build.lib.rules.cpp.CppConfiguration.HeadersCheckingMode;
 import com.google.devtools.build.lib.rules.cpp.FdoSupport.FdoMode;
@@ -54,6 +53,7 @@ import com.google.devtools.build.lib.rules.cpp.Link.LinkTargetType;
 import com.google.devtools.build.lib.shell.ShellUtils;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec.VisibleForSerialization;
+import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.FileType;
 import com.google.devtools.build.lib.util.Pair;
@@ -77,14 +77,8 @@ public final class CcCommon {
   /** Name of the build variable for the path to the input file being processed. */
   public static final String INPUT_FILE_VARIABLE_NAME = "input_file";
 
-  /**
-   * Name of the build variable for includes that compiler needs to include into sources to be
-   * compiled.
-   */
-  public static final String INCLUDES_VARIABLE_NAME = "includes";
-
-  /** Name of the build variable for stripopts for the strip action. */
-  public static final String STRIPOPTS_VARIABLE_NAME = "stripopts";
+  public static final String PIC_CONFIGURATION_ERROR =
+      "PIC compilation is requested but the toolchain does not support it";
 
   private static final String NO_COPTS_ATTRIBUTE = "nocopts";
 
@@ -122,10 +116,9 @@ public final class CcCommon {
 
   public static final ImmutableSet<String> ALL_LINK_ACTIONS =
       ImmutableSet.of(
-          Link.LinkTargetType.INTERFACE_DYNAMIC_LIBRARY.getActionName(),
+          LinkTargetType.EXECUTABLE.getActionName(),
           Link.LinkTargetType.DYNAMIC_LIBRARY.getActionName(),
-          Link.LinkTargetType.NODEPS_DYNAMIC_LIBRARY.getActionName(),
-          LinkTargetType.EXECUTABLE.getActionName());
+          Link.LinkTargetType.NODEPS_DYNAMIC_LIBRARY.getActionName());
 
   public static final ImmutableSet<String> ALL_ARCHIVE_ACTIONS =
       ImmutableSet.of(Link.LinkTargetType.STATIC_LIBRARY.getActionName());
@@ -597,16 +590,19 @@ public final class CcCommon {
       }
       result.add(includesPath);
       result.add(ruleContext.getConfiguration().getGenfilesFragment().getRelative(includesPath));
+      result.add(ruleContext.getConfiguration().getBinFragment().getRelative(includesPath));
     }
     return result;
   }
 
   /** Collects compilation prerequisite artifacts. */
   static NestedSet<Artifact> collectCompilationPrerequisites(
-      RuleContext ruleContext, CcCompilationInfo ccCompilationInfo) {
-    // TODO(bazel-team): Use ccCompilationInfo.getCompilationPrerequisites() instead; note that this
+      RuleContext ruleContext, CcCompilationContext ccCompilationContext) {
+    // TODO(bazel-team): Use ccCompilationContext.getCompilationPrerequisites() instead; note
+    // that this
     // will
-    // need cleaning up the prerequisites, as the {@code CcCompilationInfo} currently collects them
+    // need cleaning up the prerequisites, as the {@code CcCompilationContext} currently
+    // collects them
     // transitively (to get transitive headers), but source files are not transitive compilation
     // prerequisites.
     NestedSetBuilder<Artifact> prerequisites = NestedSetBuilder.stableOrder();
@@ -618,10 +614,10 @@ public final class CcCommon {
                 provider.getFilesToBuild(), SourceCategory.CC_AND_OBJC.getSourceTypes()));
       }
     }
-    prerequisites.addTransitive(ccCompilationInfo.getDeclaredIncludeSrcs());
-    prerequisites.addTransitive(ccCompilationInfo.getAdditionalInputs());
-    prerequisites.addTransitive(ccCompilationInfo.getTransitiveModules(true));
-    prerequisites.addTransitive(ccCompilationInfo.getTransitiveModules(false));
+    prerequisites.addTransitive(ccCompilationContext.getDeclaredIncludeSrcs());
+    prerequisites.addTransitive(ccCompilationContext.getAdditionalInputs());
+    prerequisites.addTransitive(ccCompilationContext.getTransitiveModules(true));
+    prerequisites.addTransitive(ccCompilationContext.getTransitiveModules(false));
     return prerequisites.build();
   }
 
@@ -677,19 +673,11 @@ public final class CcCommon {
             withBaselineCoverage);
   }
 
-  private static String getHostOrNonHostFeature(RuleContext ruleContext) {
-    if (ruleContext.getConfiguration().isHostConfiguration()) {
-      return "host";
-    } else {
-      return "nonhost";
-    }
-  }
-
-  public static ImmutableList<String> getCoverageFeatures(RuleContext ruleContext) {
+  public static ImmutableList<String> getCoverageFeatures(CcToolchainProvider toolchain) {
     ImmutableList.Builder<String> coverageFeatures = ImmutableList.builder();
-    if (ruleContext.getConfiguration().isCodeCoverageEnabled()) {
+    if (toolchain.isCodeCoverageEnabled()) {
       coverageFeatures.add(CppRuleClasses.COVERAGE);
-      if (ruleContext.getFragment(CppConfiguration.class).useLLVMCoverageMapFormat()) {
+      if (toolchain.useLLVMCoverageMapFormat()) {
         coverageFeatures.add(CppRuleClasses.LLVM_COVERAGE_MAP_FORMAT);
       } else {
         coverageFeatures.add(CppRuleClasses.GCC_COVERAGE_MAP_FORMAT);
@@ -699,35 +687,111 @@ public final class CcCommon {
   }
 
   /**
+   * Determines whether to statically link the C++ runtimes.
+   *
+   * <p>This is complicated because it depends both on a legacy field in the CROSSTOOL
+   * protobuf--supports_embedded_runtimes--and the newer crosstool
+   * feature--statically_link_cpp_runtimes. Neither, one, or both could be present or set. Or they
+   * could be set in to conflicting values.
+   *
+   * @return true if we should statically link, false otherwise.
+   */
+  private static boolean enableStaticLinkCppRuntimesFeature(
+      ImmutableSet<String> requestedFeatures,
+      ImmutableSet<String> disabledFeatures,
+      CcToolchainProvider toolchain) {
+    // All of these cases are encountered in various unit tests,
+    // integration tests, and obscure CROSSTOOLs.
+
+    // A. If the legacy field "supports_embedded_runtimes" is false (or not present):
+    //      dynamically link the cpp runtimes. Done.
+    if (!toolchain.supportsEmbeddedRuntimes()) {
+      return false;
+    }
+    // From here, the toolchain _can_ statically link the cpp runtime.
+    //
+    // B. If the feature static_link_cpp_runtimes is disabled:
+    //      dynamically link the cpp runtimes. Done.
+    if (disabledFeatures.contains(CppRuleClasses.STATIC_LINK_CPP_RUNTIMES)) {
+      return false;
+    }
+    // C. If the feature is not requested:
+    //     the feature is neither disabled nor requested: statically
+    //     link (for compatibility with the legacy field).
+    if (!requestedFeatures.contains(CppRuleClasses.STATIC_LINK_CPP_RUNTIMES)) {
+      return true;
+    }
+    // D. The feature is requested:
+    //     statically link the cpp runtimes. Done.
+    return true;
+  }
+
+  /**
+   * Creates a feature configuration for a given rule. Assumes strictly cc sources.
+   *
+   * @param ruleContext the context of the rule we want the feature configuration for.
+   * @param toolchain C++ toolchain provider.
+   * @return the feature configuration for the given {@code ruleContext}.
+   */
+  public static FeatureConfiguration configureFeaturesOrReportRuleError(
+      RuleContext ruleContext, CcToolchainProvider toolchain) {
+    return configureFeaturesOrReportRuleError(
+        ruleContext,
+        /* requestedFeatures= */ ruleContext.getFeatures(),
+        /* unsupportedFeatures= */ ruleContext.getDisabledFeatures(),
+        toolchain);
+  }
+
+  /**
    * Creates the feature configuration for a given rule.
    *
    * @return the feature configuration for the given {@code ruleContext}.
    */
-  public static FeatureConfiguration configureFeatures(
+  public static FeatureConfiguration configureFeaturesOrReportRuleError(
       RuleContext ruleContext,
       ImmutableSet<String> requestedFeatures,
       ImmutableSet<String> unsupportedFeatures,
       CcToolchainProvider toolchain) {
+    try {
+      return configureFeaturesOrThrowEvalException(
+          requestedFeatures, unsupportedFeatures, toolchain);
+    } catch (EvalException e) {
+      ruleContext.ruleError(e.getMessage());
+      return FeatureConfiguration.EMPTY;
+    }
+  }
+
+  public static FeatureConfiguration configureFeaturesOrThrowEvalException(
+      ImmutableSet<String> requestedFeatures,
+      ImmutableSet<String> unsupportedFeatures,
+      CcToolchainProvider toolchain)
+      throws EvalException {
+    CppConfiguration cppConfiguration = toolchain.getCppConfiguration();
+    ImmutableSet.Builder<String> allRequestedFeaturesBuilder = ImmutableSet.builder();
     ImmutableSet.Builder<String> unsupportedFeaturesBuilder = ImmutableSet.builder();
     unsupportedFeaturesBuilder.addAll(unsupportedFeatures);
-    unsupportedFeaturesBuilder.addAll(ruleContext.getDisabledFeatures());
     if (!toolchain.supportsHeaderParsing()) {
       // TODO(bazel-team): Remove once supports_header_parsing has been removed from the
       // cc_toolchain rule.
       unsupportedFeaturesBuilder.add(CppRuleClasses.PARSE_HEADERS);
       unsupportedFeaturesBuilder.add(CppRuleClasses.PREPROCESS_HEADERS);
     }
-    if (toolchain.getCcCompilationInfo().getCppModuleMap() == null) {
+    if (toolchain.getCcCompilationContext().getCppModuleMap() == null) {
       unsupportedFeaturesBuilder.add(CppRuleClasses.MODULE_MAPS);
     }
+    if (enableStaticLinkCppRuntimesFeature(requestedFeatures, unsupportedFeatures, toolchain)) {
+      allRequestedFeaturesBuilder.add(CppRuleClasses.STATIC_LINK_CPP_RUNTIMES);
+    } else {
+      unsupportedFeaturesBuilder.add(CppRuleClasses.STATIC_LINK_CPP_RUNTIMES);
+    }
+
     ImmutableSet<String> allUnsupportedFeatures = unsupportedFeaturesBuilder.build();
-    ImmutableSet.Builder<String> allRequestedFeaturesBuilder = ImmutableSet.builder();
 
     // If STATIC_LINK_MSVCRT feature isn't specified by user, we add DYNAMIC_LINK_MSVCRT_* feature
     // according to compilation mode.
     // If STATIC_LINK_MSVCRT feature is specified, we add STATIC_LINK_MSVCRT_* feature
     // according to compilation mode.
-    if (ruleContext.getFeatures().contains(CppRuleClasses.STATIC_LINK_MSVCRT)) {
+    if (requestedFeatures.contains(CppRuleClasses.STATIC_LINK_MSVCRT)) {
       allRequestedFeaturesBuilder.add(
           toolchain.getCompilationMode() == CompilationMode.DBG
               ? CppRuleClasses.STATIC_LINK_MSVCRT_DEBUG
@@ -741,20 +805,23 @@ public final class CcCommon {
 
     ImmutableList.Builder<String> allFeatures =
         new ImmutableList.Builder<String>()
-            .addAll(
-                ImmutableSet.of(
-                    toolchain.getCompilationMode().toString(),
-                    getHostOrNonHostFeature(ruleContext)))
+            .addAll(ImmutableSet.of(toolchain.getCompilationMode().toString()))
             .addAll(DEFAULT_FEATURES)
-            .addAll(toolchain.getFeatures().getDefaultFeaturesAndActionConfigs())
-            .addAll(ruleContext.getFeatures());
-    if (CppHelper.useFission(ruleContext.getFragment(CppConfiguration.class), toolchain)) {
+            .addAll(DEFAULT_ACTION_CONFIGS)
+            .addAll(requestedFeatures)
+            .addAll(toolchain.getFeatures().getDefaultFeaturesAndActionConfigs());
+
+    if (toolchain.isHostConfiguration()) {
+      allFeatures.add("host");
+    } else {
+      allFeatures.add("nonhost");
+    }
+
+    if (toolchain.useFission()) {
       allFeatures.add(CppRuleClasses.PER_OBJECT_DEBUG_INFO);
     }
 
-    CppConfiguration cppConfiguration = toolchain.getCppConfiguration();
-
-    allFeatures.addAll(getCoverageFeatures(ruleContext));
+    allFeatures.addAll(getCoverageFeatures(toolchain));
 
     if (cppConfiguration.getFdoInstrument() != null
         && !allUnsupportedFeatures.contains(CppRuleClasses.FDO_INSTRUMENT)) {
@@ -767,6 +834,11 @@ public final class CcCommon {
         && fdoMode != FdoMode.AUTO_FDO
         && !allUnsupportedFeatures.contains(CppRuleClasses.FDO_OPTIMIZE)) {
       allFeatures.add(CppRuleClasses.FDO_OPTIMIZE);
+      // For LLVM, support implicit enabling of ThinLTO for FDO unless it has been
+      // explicitly disabled.
+      if (toolchain.isLLVMCompiler() && !allUnsupportedFeatures.contains(CppRuleClasses.THIN_LTO)) {
+        allFeatures.add(CppRuleClasses.ENABLE_FDO_THINLTO);
+      }
     }
     if (isFdo && fdoMode == FdoMode.AUTO_FDO) {
       allFeatures.add(CppRuleClasses.AUTOFDO);
@@ -775,6 +847,9 @@ public final class CcCommon {
       if (toolchain.isLLVMCompiler() && !allUnsupportedFeatures.contains(CppRuleClasses.THIN_LTO)) {
         allFeatures.add(CppRuleClasses.ENABLE_AFDO_THINLTO);
       }
+    }
+    if (cppConfiguration.getFdoPrefetchHintsLabel() != null) {
+      allRequestedFeaturesBuilder.add(CppRuleClasses.FDO_PREFETCH_HINTS);
     }
     if (cppConfiguration.isLipoOptimizationOrInstrumentation()) {
       // Map LIPO to ThinLTO for LLVM builds.
@@ -792,47 +867,30 @@ public final class CcCommon {
         allRequestedFeaturesBuilder.add(feature);
       }
     }
-    allRequestedFeaturesBuilder.addAll(requestedFeatures);
-
-    allRequestedFeaturesBuilder.addAll(DEFAULT_ACTION_CONFIGS);
 
     try {
-      FeatureConfiguration configuration =
+      FeatureConfiguration featureConfiguration =
           toolchain.getFeatures().getFeatureConfiguration(allRequestedFeaturesBuilder.build());
       for (String feature : unsupportedFeatures) {
-        if (configuration.isEnabled(feature)) {
-          ruleContext.ruleError(
+        if (featureConfiguration.isEnabled(feature)) {
+          throw new EvalException(
+              /* location= */ null,
               "The C++ toolchain '"
-                  + ruleContext
-                  .getPrerequisite(CcToolchain.CC_TOOLCHAIN_DEFAULT_ATTRIBUTE_NAME, Mode.TARGET)
-                  .getLabel()
+                  + toolchain.getCcToolchainLabel()
                   + "' unconditionally implies feature '"
                   + feature
                   + "', which is unsupported by this rule. "
                   + "This is most likely a misconfiguration in the C++ toolchain.");
         }
       }
-      return configuration;
+      if ((cppConfiguration.forcePic() || toolchain.toolchainNeedsPic())
+          && !featureConfiguration.isEnabled(CppRuleClasses.PIC)) {
+        throw new EvalException(/* location= */ null, PIC_CONFIGURATION_ERROR);
+      }
+      return featureConfiguration;
     } catch (CollidingProvidesException e) {
-      ruleContext.ruleError(e.getMessage());
-      return FeatureConfiguration.EMPTY;
+      throw new EvalException(/* location= */ null, e.getMessage());
     }
-  }
-
-  /**
-   * Creates a feature configuration for a given rule.  Assumes strictly cc sources.
-   *
-   * @param ruleContext the context of the rule we want the feature configuration for.
-   * @param toolchain C++ toolchain provider.
-   * @return the feature configuration for the given {@code ruleContext}.
-   */
-  public static FeatureConfiguration configureFeatures(
-      RuleContext ruleContext, CcToolchainProvider toolchain) {
-    return configureFeatures(
-        ruleContext,
-        /* requestedFeatures= */ ImmutableSet.of(),
-        /* unsupportedFeatures= */ ImmutableSet.of(),
-        toolchain);
   }
 
   /**
@@ -843,13 +901,13 @@ public final class CcCommon {
     CcToolchainProvider toolchainProvider =
         (CcToolchainProvider) toolchain.get(ToolchainInfo.PROVIDER);
     FeatureConfiguration featureConfiguration =
-        CcCommon.configureFeatures(ruleContext, toolchainProvider);
+        CcCommon.configureFeaturesOrReportRuleError(ruleContext, toolchainProvider);
     if (!featureConfiguration.actionIsConfigured(
         CppCompileAction.CC_FLAGS_MAKE_VARIABLE_ACTION_NAME)) {
       return null;
     }
 
-    Variables buildVariables = toolchainProvider.getBuildVariables();
+    CcToolchainVariables buildVariables = toolchainProvider.getBuildVariables();
     String toolchainCcFlags =
         Joiner.on(" ")
             .join(

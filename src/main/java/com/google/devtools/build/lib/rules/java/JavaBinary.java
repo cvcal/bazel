@@ -18,7 +18,6 @@ import static com.google.devtools.build.lib.rules.java.DeployArchiveBuilder.Comp
 
 import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.devtools.build.lib.actions.Artifact;
@@ -139,8 +138,7 @@ public class JavaBinary implements RuleConfiguredTargetFactory {
         CppHelper.getToolchainUsingDefaultCcToolchainAttribute(ruleContext);
     // TODO(b/64384912): Remove in favor of CcToolchainProvider
     boolean stripAsDefault =
-        CppHelper.useFission(cppConfiguration, ccToolchain)
-            && cppConfiguration.getCompilationMode() == CompilationMode.OPT;
+        ccToolchain.useFission() && cppConfiguration.getCompilationMode() == CompilationMode.OPT;
     Artifact launcher = semantics.getLauncher(ruleContext, common, deployArchiveBuilder,
         runfilesBuilder, jvmFlags, attributesBuilder, stripAsDefault);
 
@@ -148,9 +146,15 @@ public class JavaBinary implements RuleConfiguredTargetFactory {
     Artifact unstrippedLauncher = null;
     if (stripAsDefault) {
       unstrippedDeployArchiveBuilder = new DeployArchiveBuilder(semantics, ruleContext);
-      unstrippedLauncher = semantics.getLauncher(ruleContext, common,
-          unstrippedDeployArchiveBuilder, runfilesBuilder, jvmFlags, attributesBuilder,
-          false  /* shouldStrip */);
+      unstrippedLauncher =
+          semantics.getLauncher(
+              ruleContext,
+              common,
+              unstrippedDeployArchiveBuilder,
+              runfilesBuilder,
+              jvmFlags,
+              attributesBuilder,
+              /* shouldStrip= */ false);
     }
 
     JavaCompilationArtifacts.Builder javaArtifactsBuilder = new JavaCompilationArtifacts.Builder();
@@ -247,8 +251,7 @@ public class JavaBinary implements RuleConfiguredTargetFactory {
     // Collect the action inputs for the runfiles collector here because we need to access the
     // analysis environment, and that may no longer be safe when the runfiles collector runs.
     Iterable<Artifact> dynamicRuntimeActionInputs =
-        CppHelper.getToolchainUsingDefaultCcToolchainAttribute(ruleContext)
-            .getDynamicRuntimeLinkInputs();
+        CppHelper.getDefaultCcToolchainDynamicRuntimeInputs(ruleContext);
 
     Iterables.addAll(jvmFlags,
         semantics.getJvmFlags(ruleContext, common.getSrcsArtifacts(), userJvmFlags));
@@ -303,9 +306,6 @@ public class JavaBinary implements RuleConfiguredTargetFactory {
         JavaPrimaryClassProvider.class,
         new JavaPrimaryClassProvider(
             semantics.getPrimaryClass(ruleContext, common.getSrcsArtifacts())));
-    semantics.addProviders(ruleContext, common, jvmFlags, classJar, srcJar,
-            genClassJar, genSourceJar, ImmutableMap.<Artifact, Artifact>of(),
-            filesBuilder, builder);
     if (generatedExtensionRegistryProvider != null) {
       builder.add(GeneratedExtensionRegistryProvider.class, generatedExtensionRegistryProvider);
     }

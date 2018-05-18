@@ -56,17 +56,21 @@ final class ProcessWrapperSandboxedSpawnRunner extends AbstractSandboxSpawnRunne
     this.execRoot = cmdEnv.getExecRoot();
     this.localEnvProvider =
         OS.getCurrent() == OS.DARWIN
-            ? new XcodeLocalEnvProvider(productName, cmdEnv.getClientEnv())
+            ? new XcodeLocalEnvProvider(cmdEnv.getClientEnv())
             : new PosixLocalEnvProvider(cmdEnv.getClientEnv());
     this.sandboxBase = sandboxBase;
     this.timeoutKillDelay = timeoutKillDelay;
   }
 
   @Override
-  protected SpawnResult actuallyExec(Spawn spawn, SpawnExecutionPolicy policy)
+  protected SpawnResult actuallyExec(Spawn spawn, SpawnExecutionContext context)
       throws ExecException, IOException, InterruptedException {
-    // Each invocation of "exec" gets its own sandbox.
-    Path sandboxPath = sandboxBase.getRelative(Integer.toString(policy.getId()));
+    // Each invocation of "exec" gets its own sandbox base.
+    // Note that the value returned by context.getId() is only unique inside one given SpawnRunner,
+    // so we have to prefix our name to turn it into a globally unique value.
+    Path sandboxPath =
+        sandboxBase.getRelative(getName()).getRelative(Integer.toString(context.getId()));
+    sandboxPath.getParentDirectory().createDirectory();
     sandboxPath.createDirectory();
 
     // b/64689608: The execroot of the sandboxed process must end with the workspace name, just like
@@ -78,7 +82,7 @@ final class ProcessWrapperSandboxedSpawnRunner extends AbstractSandboxSpawnRunne
     Map<String, String> environment =
         localEnvProvider.rewriteLocalEnv(spawn.getEnvironment(), execRoot, "/tmp");
 
-    Duration timeout = policy.getTimeout();
+    Duration timeout = context.getTimeout();
     ProcessWrapperUtil.CommandLineBuilder commandLineBuilder =
         ProcessWrapperUtil.commandLineBuilder(processWrapper.getPathString(), spawn.getArguments())
             .setTimeout(timeout);
@@ -97,11 +101,11 @@ final class ProcessWrapperSandboxedSpawnRunner extends AbstractSandboxSpawnRunne
             sandboxExecRoot,
             commandLineBuilder.build(),
             environment,
-            SandboxHelpers.getInputFiles(spawn, policy, execRoot),
+            SandboxHelpers.processInputFiles(spawn, context, execRoot),
             SandboxHelpers.getOutputFiles(spawn),
             getWritableDirs(sandboxExecRoot, environment));
 
-    return runSpawn(spawn, sandbox, policy, execRoot, timeout, statisticsPath);
+    return runSpawn(spawn, sandbox, context, execRoot, timeout, statisticsPath);
   }
 
   @Override

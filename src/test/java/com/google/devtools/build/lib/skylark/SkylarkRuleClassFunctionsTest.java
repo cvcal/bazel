@@ -51,11 +51,13 @@ import com.google.devtools.build.lib.skylark.util.SkylarkTestCase;
 import com.google.devtools.build.lib.syntax.BuildFileAST;
 import com.google.devtools.build.lib.syntax.ClassObject;
 import com.google.devtools.build.lib.syntax.Environment;
+import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.EvalUtils;
 import com.google.devtools.build.lib.syntax.SkylarkDict;
 import com.google.devtools.build.lib.syntax.SkylarkList.MutableList;
 import com.google.devtools.build.lib.syntax.SkylarkList.Tuple;
 import com.google.devtools.build.lib.syntax.SkylarkNestedSet;
+import com.google.devtools.build.lib.syntax.SkylarkSemantics;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.testutil.MoreAsserts;
 import com.google.devtools.build.lib.util.FileTypeSet;
@@ -484,16 +486,16 @@ public class SkylarkRuleClassFunctionsTest extends SkylarkTestCase {
   public void testLabelAttrDefaultValueAsStringBadValue() throws Exception {
     checkErrorContains(
         "invalid label '/foo:bar' in parameter 'default' of attribute 'label': "
-            + "invalid label: /foo:bar",
+            + "invalid target name '/foo:bar'",
         "attr.label(default = '/foo:bar')");
 
     checkErrorContains(
         "invalid label '/bar:foo' in element 1 of parameter 'default' of attribute "
-            + "'label_list': invalid label: /bar:foo",
+            + "'label_list': invalid target name '/bar:foo'",
         "attr.label_list(default = ['//foo:bar', '/bar:foo'])");
 
     checkErrorContains(
-        "invalid label '/bar:foo' in dict key element: invalid label: /bar:foo",
+        "invalid label '/bar:foo' in dict key element: invalid target name '/bar:foo'",
         "attr.label_keyed_string_dict(default = {'//foo:bar': 'a', '/bar:foo': 'b'})");
   }
 
@@ -735,7 +737,7 @@ public class SkylarkRuleClassFunctionsTest extends SkylarkTestCase {
   public void testRuleBadTypeForDoc() throws Exception {
     registerDummyUserDefinedFunction();
     checkErrorContains(
-        "argument 'doc' has type 'int', but should be 'string'",
+        "expected string for 'doc' while calling rule but got int instead",
         "rule(impl, doc = 1)");
   }
 
@@ -790,6 +792,15 @@ public class SkylarkRuleClassFunctionsTest extends SkylarkTestCase {
     Object result = evalRuleClassCode("FileType(['.css'])");
     SkylarkFileType fts = (SkylarkFileType) result;
     assertThat(fts.getExtensions()).isEqualTo(ImmutableList.of(".css"));
+  }
+
+  @Test
+  public void testFileTypeIsDisabled() throws Exception {
+    SkylarkSemantics semantics =
+        SkylarkSemantics.DEFAULT_SEMANTICS.toBuilder().incompatibleDisallowFileType(true).build();
+    EvalException expected =
+        assertThrows(EvalException.class, () -> evalRuleClassCode(semantics, "FileType(['.css'])"));
+    assertThat(expected).hasMessageThat().contains("FileType function is not available.");
   }
 
   @Test
@@ -914,7 +925,7 @@ public class SkylarkRuleClassFunctionsTest extends SkylarkTestCase {
   @Test
   public void testLabelAttrWrongDefault() throws Exception {
     checkErrorContains(
-        "expected value of type 'Label or string or SkylarkLateBoundDefault or "
+        "expected value of type 'Label or string or LateBoundDefault or "
             + "function or NoneType' for parameter 'default', in method call "
             + "label(int default) of 'attr (a language module)'",
         "attr.label(default = 123)");
@@ -1311,7 +1322,7 @@ public class SkylarkRuleClassFunctionsTest extends SkylarkTestCase {
   @Test
   public void declaredProvidersBadTypeForDoc() throws Exception {
     checkErrorContains(
-        "argument 'doc' has type 'int', but should be 'string'",
+        "expected string for 'doc' while calling provider but got int instead",
         "provider(doc = 1)");
   }
 
@@ -1439,7 +1450,7 @@ public class SkylarkRuleClassFunctionsTest extends SkylarkTestCase {
     );
     MoreAsserts.assertContainsEvent(ev.getEventCollector(),
         " Illegal argument: element in 'provides' is of unexpected type."
-            + " Should be list of providers, but got int. ");
+            + " Should be list of providers, but got item of type int. ");
   }
 
   @Test
@@ -1454,7 +1465,7 @@ public class SkylarkRuleClassFunctionsTest extends SkylarkTestCase {
   public void aspectBadTypeForDoc() throws Exception {
     registerDummyUserDefinedFunction();
     checkErrorContains(
-        "argument 'doc' has type 'int', but should be 'string'",
+        "expected string for 'doc' while calling aspect but got int instead",
         "aspect(impl, doc = 1)");
   }
 

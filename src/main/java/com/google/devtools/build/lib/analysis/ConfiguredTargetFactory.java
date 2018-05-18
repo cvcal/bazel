@@ -77,7 +77,6 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Set;
 import javax.annotation.Nullable;
 
@@ -291,7 +290,7 @@ public final class ConfiguredTargetFactory {
       Artifact artifact =
           artifactFactory.getSourceArtifact(
               inputFile.getExecPath(),
-              ArtifactRoot.asSourceRoot(inputFile.getPackage().getSourceRoot()),
+              inputFile.getPackage().getSourceRoot(),
               ConfiguredTargetKey.of(target.getLabel(), config));
 
       return new InputFileConfiguredTarget(targetContext, inputFile, artifact);
@@ -339,7 +338,7 @@ public final class ConfiguredTargetFactory {
             .setVisibility(convertVisibility(prerequisiteMap, env.getEventHandler(), rule, null))
             .setPrerequisites(prerequisiteMap)
             .setConfigConditions(configConditions)
-            .setUniversalFragment(ruleClassProvider.getUniversalFragment())
+            .setUniversalFragments(ruleClassProvider.getUniversalFragments())
             .setToolchainContext(toolchainContext)
             .build();
     if (ruleContext.hasErrors()) {
@@ -366,7 +365,9 @@ public final class ConfiguredTargetFactory {
         // TODO(bazel-team): maybe merge with RuleConfiguredTargetBuilder?
         return SkylarkRuleConfiguredTargetUtil.buildRule(
             ruleContext,
+            rule.getRuleClassObject().getAdvertisedProviders(),
             rule.getRuleClassObject().getConfiguredTargetFunction(),
+            rule.getLocation(),
             env.getSkylarkSemantics());
       } else {
         RuleClass.ConfiguredTargetFactory<ConfiguredTarget, RuleContext, ActionConflictException>
@@ -461,7 +462,7 @@ public final class ConfiguredTargetFactory {
             .setPrerequisites(prerequisiteMap)
             .setAspectAttributes(aspectAttributes)
             .setConfigConditions(configConditions)
-            .setUniversalFragment(ruleClassProvider.getUniversalFragment())
+            .setUniversalFragments(ruleClassProvider.getUniversalFragments())
             .setToolchainContext(toolchainContext)
             .build();
     if (ruleContext.hasErrors()) {
@@ -491,7 +492,7 @@ public final class ConfiguredTargetFactory {
       for (Aspect underlyingAspect : aspectPath) {
         ImmutableMap<String, Attribute> currentAttributes = underlyingAspect.getDefinition()
             .getAttributes();
-        for (Entry<String, Attribute> kv : currentAttributes.entrySet()) {
+        for (Map.Entry<String, Attribute> kv : currentAttributes.entrySet()) {
           if (!aspectAttributes.containsKey(kv.getKey())) {
             aspectAttributes.put(kv.getKey(), kv.getValue());
           }

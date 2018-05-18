@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <cassert>
 #include <iostream>
 
 #include "src/main/cpp/blaze_util_platform.h"
@@ -30,10 +31,9 @@
 #include "src/main/cpp/util/port.h"
 #include "src/main/cpp/util/strings.h"
 
-using blaze_util::die;
-
 namespace blaze {
 
+using std::map;
 using std::string;
 using std::vector;
 
@@ -75,8 +75,9 @@ bool GetNullaryOption(const char *arg, const char *key) {
   if (value == NULL) {
     return false;
   } else if (value[0] == '=') {
-    die(blaze_exit_code::BAD_ARGV,
-        "In argument '%s': option '%s' does not take a value.", arg, key);
+    BAZEL_DIE(blaze_exit_code::BAD_ARGV)
+        << "In argument '" << arg << "': option '" << key
+        << "' does not take a value.";
   } else if (value[0]) {
     return false;  // trailing garbage in key name
   }
@@ -122,51 +123,6 @@ bool SearchNullaryOption(const vector<string>& args,
     }
   }
   return result;
-}
-
-// Read the Jvm version from a file descriptor. The read fd
-// should contains a similar output as the java -version output.
-string ReadJvmVersion(const string& version_string) {
-  // try to look out for 'version "'
-  static const string version_pattern = "version \"";
-  size_t found = version_string.find(version_pattern);
-  if (found != string::npos) {
-    found += version_pattern.size();
-    // If we found "version \"", process until next '"'
-    size_t end = version_string.find("\"", found);
-    if (end == string::npos) {  // consider end of string as a '"'
-      end = version_string.size();
-    }
-    return version_string.substr(found, end - found);
-  }
-
-  return "";
-}
-
-bool CheckJavaVersionIsAtLeast(const string &jvm_version,
-                               const string &version_spec) {
-  vector<string> jvm_version_vect = blaze_util::Split(jvm_version, '.');
-  int jvm_version_size = static_cast<int>(jvm_version_vect.size());
-  vector<string> version_spec_vect = blaze_util::Split(version_spec, '.');
-  int version_spec_size = static_cast<int>(version_spec_vect.size());
-  int i;
-  for (i = 0; i < jvm_version_size && i < version_spec_size; i++) {
-    int jvm = blaze_util::strto32(jvm_version_vect[i].c_str(), NULL, 10);
-    int spec = blaze_util::strto32(version_spec_vect[i].c_str(), NULL, 10);
-    if (jvm > spec) {
-      return true;
-    } else if (jvm < spec) {
-      return false;
-    }
-  }
-  if (i < version_spec_size) {
-    for (; i < version_spec_size; i++) {
-      if (version_spec_vect[i] != "0") {
-        return false;
-      }
-    }
-  }
-  return true;
 }
 
 bool IsArg(const string& arg) {
@@ -226,6 +182,39 @@ void SetDebugLog(bool enabled) {
   } else {
     blaze_util::SetLoggingOutputStream(nullptr);
   }
+}
+
+void WithEnvVars::SetEnvVars(const map<string, EnvVarValue>& vars) {
+  for (const auto& var : vars) {
+    switch (var.second.action) {
+      case EnvVarAction::UNSET:
+        UnsetEnv(var.first);
+        break;
+
+      case EnvVarAction::SET:
+        SetEnv(var.first, var.second.value);
+        break;
+
+      default:
+        assert(false);
+    }
+  }
+}
+
+WithEnvVars::WithEnvVars(const map<string, EnvVarValue>& vars) {
+  for (const auto& v : vars) {
+    if (ExistsEnv(v.first)) {
+      _old_values[v.first] = EnvVarValue(EnvVarAction::SET, GetEnv(v.first));
+    } else {
+      _old_values[v.first] = EnvVarValue(EnvVarAction::UNSET, "");
+    }
+  }
+
+  SetEnvVars(vars);
+}
+
+WithEnvVars::~WithEnvVars() {
+  SetEnvVars(_old_values);
 }
 
 }  // namespace blaze

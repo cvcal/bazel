@@ -13,142 +13,212 @@
 // limitations under the License.
 package com.google.devtools.build.lib.rules.android;
 
-import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.Artifact;
-import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.RuleContext;
-import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
-import com.google.devtools.build.lib.packages.ImplicitOutputsFunction;
-import com.google.devtools.build.lib.packages.ImplicitOutputsFunction.SafeImplicitOutputsFunction;
+import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
 import com.google.devtools.build.lib.rules.java.JavaUtil;
+import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import java.util.Map;
+import java.util.Objects;
 import javax.annotation.Nullable;
 
 /** Wraps an Android Manifest and provides utilities for working with it */
 @Immutable
 public class AndroidManifest {
-  private static final SafeImplicitOutputsFunction MERGED_MANIFEST =
-      ImplicitOutputsFunction.fromTemplates("{name}_manifest/AndroidManifest.xml");
-  private static final SafeImplicitOutputsFunction MERGE_LOG =
-      ImplicitOutputsFunction.fromTemplates("{name}_manifest/manifest_merger_log.txt");
+  private static final String CUSTOM_PACKAGE_ATTR = "custom_package";
 
-  private final RuleContext ruleContext;
-  /**
-   * The current manifest. May be null if this rule has no manifest and we have not yet generated
-   * one through merging or stamping.
-   */
-  @Nullable private final Artifact manifest;
-  private final String pkg;
-  private final boolean isDummy;
+  private final Artifact manifest;
+  /** The Android package. Will be null if and only if this is an aar_import target. */
+  @Nullable private final String pkg;
+  private final boolean exported;
 
-  public static AndroidManifest empty(RuleContext ruleContext) {
-    return of(ruleContext, null, null);
+  public static StampedAndroidManifest forAarImport(Artifact manifest) {
+    return new StampedAndroidManifest(manifest, /* pkg = */ null, /* exported = */ true);
   }
 
   /**
-   * @param ruleContext the current context
-   * @param manifest this target's manifest. Can be null if this target has no manifest, in which
-   *     case a dummy manifest will be generated.
-   * @param customPackage this target's custom package. If null, the default package, derived from
-   *     BUILD file location, will be used.
-   * @return an AndroidManifest object wrapping the manifest and package
+   * Gets the manifest for this rule.
+   *
+   * <p>If no manifest is specified in the rule's attributes, an empty manifest will be generated.
+   *
+   * <p>Unlike {@link #fromAttributes(RuleContext, AndroidSemantics)}, the AndroidSemantics-specific
+   * manifest processing methods will not be applied in this method. The manifest returned by this
+   * method will be the same regardless of the AndroidSemantics being used.
    */
-  public static AndroidManifest of(
-      RuleContext ruleContext, @Nullable Artifact manifest, @Nullable String customPackage) {
-    return new AndroidManifest(
+  public static AndroidManifest fromAttributes(RuleContext ruleContext)
+      throws InterruptedException, RuleErrorException {
+    return fromAttributes(ruleContext, null);
+  }
+
+  /**
+   * Gets the manifest for this rule.
+   *
+   * <p>If no manifest is specified in the rule's attributes, an empty manifest will be generated.
+   *
+   * <p>If a non-null {@link AndroidSemantics} is passed, AndroidSemantics-specific manifest
+   * processing will be preformed on this manifest. Otherwise, basic manifest renaming will be
+   * performed if needed.
+   *
+   */
+  public static AndroidManifest fromAttributes(
+      RuleContext ruleContext, @Nullable AndroidSemantics androidSemantics)
+      throws RuleErrorException, InterruptedException {
+    Artifact rawManifest = null;
+    if (AndroidResources.definesAndroidResources(ruleContext.attributes())) {
+      AndroidResources.validateRuleContext(ruleContext);
+      rawManifest = ApplicationManifest.getManifestFromAttributes(ruleContext);
+    }
+
+    return from(
         ruleContext,
-        manifest,
-        customPackage == null ? getDefaultPackage(ruleContext) : customPackage,
-        manifest == null);
+        rawManifest,
+        androidSemantics,
+        getAndroidPackage(ruleContext),
+        AndroidCommon.getExportsManifest(ruleContext));
   }
 
-  AndroidManifest(
-      RuleContext ruleContext, @Nullable Artifact manifest, String pkg, boolean isDummy) {
-    this.ruleContext = ruleContext;
+  /**
+   * Creates an AndroidManifest object, with correct preprocessing, from explicit variables.
+   *
+   * <p>Attributes included in the RuleContext will not be used; use {@link #from(RuleContext)}
+   * instead.
+   *
+   * <p>In addition, the AndroidSemantics-specific manifest processing methods will not be applied
+   * in this method. The manifest returned by this method will be the same regardless of the
+   * AndroidSemantics being used. use {@link #from(RuleContext, AndroidSemantics)} instead if you
+   * want AndroidSemantics-specific behavior.
+   */
+  public static AndroidManifest from(
+      RuleContext ruleContext,
+      @Nullable Artifact rawManifest,
+      @Nullable String pkg,
+      boolean exportsManifest)
+      throws InterruptedException {
+    return from(ruleContext, rawManifest, null, pkg, exportsManifest);
+  }
+
+  /**
+   * Inner method to create an AndroidManifest.
+   *
+   * <p>AndroidSemantics-specific processing will be used if a non-null AndroidSemantics is passed.
+   */
+  static AndroidManifest from(
+      RuleContext ruleContext,
+      @Nullable Artifact rawManifest,
+      @Nullable AndroidSemantics androidSemantics,
+      @Nullable String pkg,
+      boolean exportsManifest)
+      throws InterruptedException {
+    if (pkg == null) {
+      pkg = getDefaultPackage(ruleContext);
+    }
+
+    if (rawManifest == null) {
+      // Generate a dummy manifest
+      return StampedAndroidManifest.createEmpty(ruleContext, pkg, /* exported = */ false);
+    }
+
+    Artifact renamedManifest;
+    if (androidSemantics != null) {
+      renamedManifest = androidSemantics.renameManifest(ruleContext, rawManifest);
+    } else {
+      renamedManifest = ApplicationManifest.renameManifestIfNeeded(ruleContext, rawManifest);
+    }
+
+    return new AndroidManifest(renamedManifest, pkg, exportsManifest);
+  }
+
+  AndroidManifest(AndroidManifest other, Artifact manifest) {
+    this(manifest, other.pkg, other.exported);
+  }
+
+  /**
+   * Creates a manifest wrapper without doing any processing. From within a rule, use {@link
+   * #from(RuleContext, AndroidSemantics)} instead.
+   */
+  public AndroidManifest(Artifact manifest, @Nullable String pkg, boolean exported) {
     this.manifest = manifest;
     this.pkg = pkg;
-    this.isDummy = isDummy;
-  }
-
-  /**
-   * Merges the current manifest with manifests from the specified deps and stamps the result.
-   *
-   * <p>Manifests will not be merged if the dependencies do not provide {@link AndroidManifestInfo}
-   * or the provided manifests are generated dummies.
-   *
-   * <p>The resulting manifest will always be stamped if needed, even if no merging is done.
-   */
-  public StampedAndroidManifest stampAndMergeWith(ImmutableList<ConfiguredTarget> deps)
-      throws InterruptedException {
-    ImmutableMap.Builder<Artifact, Label> mergeeBuilder = ImmutableMap.builder();
-    for (ConfiguredTarget dep : deps) {
-      AndroidManifestInfo info = dep.get(AndroidManifestInfo.PROVIDER);
-      if (info == null || info.isDummy()) {
-        continue;
-      }
-      mergeeBuilder.put(info.getManifest(), dep.getLabel());
-    }
-
-    ImmutableMap<Artifact, Label> mergeeManifests = mergeeBuilder.build();
-
-    if (mergeeManifests.isEmpty()) {
-      return stamp();
-    }
-
-    Artifact merged = ruleContext.getImplicitOutputArtifact(MERGED_MANIFEST);
-
-    // Since we're already invoking an action to merge, we may as well stamp here as well.
-    getActionBuilder(merged)
-        .setMergeeManifests(mergeeManifests)
-        .setLogOut(ruleContext.getImplicitOutputArtifact(MERGE_LOG))
-        .build(ruleContext);
-
-    return new StampedAndroidManifest(ruleContext, merged, pkg, false);
+    this.exported = exported;
   }
 
   /** If needed, stamps the manifest with the correct Java package */
-  StampedAndroidManifest stamp() throws InterruptedException {
-    Artifact stamped = ruleContext.getImplicitOutputArtifact(MERGED_MANIFEST);
-
-    getActionBuilder(stamped).build(ruleContext);
-
-    return new StampedAndroidManifest(ruleContext, stamped, pkg, isDummy);
+  public StampedAndroidManifest stamp(RuleContext ruleContext) {
+    return new StampedAndroidManifest(
+        ApplicationManifest.maybeSetManifestPackage(ruleContext, manifest, pkg).orElse(manifest),
+        pkg,
+        exported);
   }
 
   /**
-   * Gets the manifest artifact wrapped by this object. May be null if the manifest is to be
-   * generated but has not been.
+   * Stamps the manifest with values from the "manifest_values" attributes.
+   *
+   * <p>If no manifest values are specified, the manifest will remain unstamped.
    */
-  @Nullable
-  Artifact getManifest() {
+  public StampedAndroidManifest stampWithManifestValues(RuleContext ruleContext) {
+    return mergeWithDeps(
+        ruleContext,
+        ResourceDependencies.empty(),
+        ApplicationManifest.getManifestValues(ruleContext),
+        ApplicationManifest.useLegacyMerging(ruleContext));
+  }
+
+  /**
+   * Merges the manifest with any dependent manifests, extracted from rule attributes.
+   *
+   * <p>The manifest will also be stamped with any manifest values specified in the target's
+   * attributes
+   *
+   * <p>If there is no merging to be done and no manifest values are specified, the manifest will
+   * remain unstamped.
+   */
+  public StampedAndroidManifest mergeWithDeps(RuleContext ruleContext) {
+    return mergeWithDeps(
+        ruleContext,
+        ResourceDependencies.fromRuleDeps(ruleContext, /* neverlink = */ false),
+        ApplicationManifest.getManifestValues(ruleContext),
+        ApplicationManifest.useLegacyMerging(ruleContext));
+  }
+
+  public StampedAndroidManifest mergeWithDeps(
+      RuleContext ruleContext,
+      ResourceDependencies resourceDeps,
+      Map<String, String> manifestValues,
+      boolean useLegacyMerger) {
+    Artifact newManifest =
+        ApplicationManifest.maybeMergeWith(
+            ruleContext, manifest, resourceDeps, manifestValues, useLegacyMerger, pkg)
+            .orElse(manifest);
+
+    return new StampedAndroidManifest(newManifest, pkg, exported);
+  }
+
+  public Artifact getManifest() {
     return manifest;
   }
 
+  @Nullable
   String getPackage() {
     return pkg;
   }
 
-  boolean isDummy() {
-    return isDummy;
+  boolean isExported() {
+    return exported;
   }
 
-  /** Gets a {@link ManifestMergerActionBuilder} with common settings always used by this object. */
-  private ManifestMergerActionBuilder getActionBuilder(Artifact manifestOutput) {
-    return new ManifestMergerActionBuilder(ruleContext)
-        .setCustomPackage(pkg)
-        // The current manifest merger action uses the "custom_package" value when working on
-        // "library" targets, and ignores it and removes any tool annotations from the manifest
-        // otherwise. As this method is not intended to produce a final merged manifest, even when
-        // run on a binary, always use the "library" settings here.
-        .setLibrary(true)
-        .setManifest(manifest)
-        .setManifestOutput(manifestOutput);
+  /** Gets the Android package for this target, from either rule configuration or Java package */
+  private static String getAndroidPackage(RuleContext ruleContext) {
+    if (ruleContext.attributes().isAttributeValueExplicitlySpecified(CUSTOM_PACKAGE_ATTR)) {
+      return ruleContext.attributes().get(CUSTOM_PACKAGE_ATTR, Type.STRING);
+    }
+
+    return getDefaultPackage(ruleContext);
   }
 
   /** Gets the default Java package */
-  static String getDefaultPackage(RuleContext ruleContext) {
+  public static String getDefaultPackage(RuleContext ruleContext) {
     PathFragment dummyJar = ruleContext.getPackageDirectory().getChild("Dummy.jar");
     return getJavaPackageFromPath(ruleContext, dummyJar);
   }
@@ -179,5 +249,25 @@ public class AndroidManifest {
               + "'custom_package' attribute.");
     }
     return JavaUtil.getJavaPackageName(jarPathFragment);
+  }
+
+  @Override
+  public boolean equals(Object object) {
+    if (object == null || getClass() != object.getClass()) {
+      return false;
+    }
+
+    AndroidManifest other = (AndroidManifest) object;
+
+    return manifest.equals(other.manifest)
+        && Objects.equals(pkg, other.pkg)
+        && exported == other.exported;
+  }
+
+  @Override
+  public int hashCode() {
+    // Hash the current class with the other fields to distinguish between this AndroidManifest and
+    // classes that extend it.
+    return Objects.hash(manifest, pkg, exported, getClass());
   }
 }

@@ -14,31 +14,19 @@
 
 package com.google.devtools.build.lib.sandbox;
 
-import com.google.common.base.Preconditions;
-import com.google.common.collect.Iterables;
-import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.IOException;
 import java.util.Collection;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Set;
 
 /**
  * Creates an execRoot for a Spawn that contains input files as symlinks to their original
  * destination.
  */
-public class SymlinkedSandboxedSpawn implements SandboxedSpawn {
-  private final Path sandboxPath;
-  private final Path sandboxExecRoot;
-  private final List<String> arguments;
-  private final Map<String, String> environment;
-  private final Map<PathFragment, Path> inputs;
-  private final Collection<PathFragment> outputs;
-  private final Set<Path> writableDirs;
+public class SymlinkedSandboxedSpawn extends AbstractContainerizingSandboxedSpawn {
 
   public SymlinkedSandboxedSpawn(
       Path sandboxPath,
@@ -48,100 +36,11 @@ public class SymlinkedSandboxedSpawn implements SandboxedSpawn {
       Map<PathFragment, Path> inputs,
       Collection<PathFragment> outputs,
       Set<Path> writableDirs) {
-    this.sandboxPath = sandboxPath;
-    this.sandboxExecRoot = sandboxExecRoot;
-    this.arguments = arguments;
-    this.environment = environment;
-    this.inputs = inputs;
-    this.outputs = outputs;
-    this.writableDirs = writableDirs;
+    super(sandboxPath, sandboxExecRoot, arguments, environment, inputs, outputs, writableDirs);
   }
 
   @Override
-  public Path getSandboxExecRoot() {
-    return sandboxExecRoot;
-  }
-
-  @Override
-  public List<String> getArguments() {
-    return arguments;
-  }
-
-  @Override
-  public Map<String, String> getEnvironment() {
-    return environment;
-  }
-
-  @Override
-  public void createFileSystem() throws IOException {
-    createDirectories();
-    createInputs(inputs);
-  }
-
-  /**
-   * No input can be a child of another input, because otherwise we might try to create a symlink
-   * below another symlink we created earlier - which means we'd actually end up writing somewhere
-   * in the workspace.
-   *
-   * <p>If all inputs were regular files, this situation could naturally not happen - but
-   * unfortunately, we might get the occasional action that has directories in its inputs.
-   *
-   * <p>Creating all parent directories first ensures that we can safely create symlinks to
-   * directories, too, because we'll get an IOException with EEXIST if inputs happen to be nested
-   * once we start creating the symlinks for all inputs.
-   */
-  private void createDirectories() throws IOException {
-    LinkedHashSet<Path> dirsToCreate = new LinkedHashSet<>();
-
-    for (PathFragment path : Iterables.concat(inputs.keySet(), outputs)) {
-      Preconditions.checkArgument(!path.isAbsolute());
-      Preconditions.checkArgument(!path.containsUplevelReferences());
-      for (int i = 0; i < path.segmentCount(); i++) {
-        dirsToCreate.add(sandboxExecRoot.getRelative(path.subFragment(0, i)));
-      }
-    }
-
-    for (Path path : dirsToCreate) {
-      path.createDirectory();
-    }
-
-    for (Path dir : writableDirs) {
-      if (dir.startsWith(sandboxExecRoot)) {
-        dir.createDirectoryAndParents();
-      }
-    }
-  }
-
-  protected void createInputs(Map<PathFragment, Path> inputs) throws IOException {
-    // All input files are relative to the execroot.
-    for (Entry<PathFragment, Path> entry : inputs.entrySet()) {
-      Path key = sandboxExecRoot.getRelative(entry.getKey());
-      // A null value means that we're supposed to create an empty file as the input.
-      if (entry.getValue() != null) {
-        key.createSymbolicLink(entry.getValue());
-      } else {
-        FileSystemUtils.createEmptyFile(key);
-      }
-    }
-  }
-
-  @Override
-  public void copyOutputs(Path execRoot) throws IOException {
-    SandboxedSpawn.moveOutputs(outputs, sandboxExecRoot, execRoot);
-  }
-
-  @Override
-  public void delete() {
-    try {
-      FileSystemUtils.deleteTree(sandboxPath);
-    } catch (IOException e) {
-      // This usually means that the Spawn itself exited, but still has children running that
-      // we couldn't wait for, which now block deletion of the sandbox directory. On Linux this
-      // should never happen, as we use PID namespaces and where they are not available the
-      // subreaper feature to make sure all children have been reliably killed before returning,
-      // but on other OS this might not always work. The SandboxModule will try to delete them
-      // again when the build is all done, at which point it hopefully works, so let's just go
-      // on here.
-    }
+  protected void copyFile(Path source, Path target) throws IOException {
+    target.createSymbolicLink(source);
   }
 }
